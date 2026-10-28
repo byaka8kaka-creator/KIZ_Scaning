@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "КИЗ — сроки годности",
+  "description": "Загрузка КИЗ из Excel, авторизация КриптоПро и получение данных Честного знака.",
+  "version": "1.0.0",
+  "minimum_chrome_version": "102",
+  "permissions": ["storage"],
+  "host_permissions": ["https://markirovka.crpt.ru/*"],
+  "background": {"service_worker": "background.js", "type": "module"},
+  "action": {"default_title": "Открыть проверку КИЗ"},
+  "content_scripts": [{
+    "matches": ["https://cryptopro.ru/sites/default/files/products/cades/demopage/cades_bes_sample.html*"],
+    "js": ["cryptopro.js"],
+    "run_at": "document_idle"
+  }]
+}

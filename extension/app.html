@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Проверка КИЗ</title><link rel="stylesheet" href="app.css"></head>
+<body><main>
+<header><span class="badge">ЧЕСТНЫЙ ЗНАК · TRUE API</span><h1>Проверка сроков годности</h1><p>Загрузите Excel с кодами маркировки и получите данные о товарах.</p></header>
+<section><h2>1. Авторизация</h2><p id="authStatus" role="status">Проверяем авторизацию…</p><button id="login">Авторизоваться через КриптоПро</button>
+<p class="hint">Откроется страница КриптоПро. Выберите свой сертификат и подпишите данные. Токен используется повторно в течение 10 часов.</p>
+<details><summary>Вставить подпись вручную</summary><p>После начала авторизации скопируйте готовую подпись со страницы КриптоПро.</p><textarea id="signature" aria-label="Подпись Base64" placeholder="Подпись в Base64" spellcheck="false"></textarea><button id="signIn">Отправить подпись</button></details></section>
+<section><h2>2. Загрузка КИЗ</h2><label class="upload">Файл Excel (.xls, .xlsx) <input id="file" type="file" accept=".xls,.xlsx"></label>
+<div class="settings"><label>Лист <select id="sheet" disabled></select></label><label>Столбец с КИЗ <select id="column" disabled></select></label><label><input id="header" type="checkbox" checked> Первая строка — заголовок</label></div>
+<p class="hint">КИЗ должны храниться в Excel как текст. Используем первые 24 символа, повторяющиеся коды объединяем.</p><p id="fileStatus" role="status">Файл не выбран.</p><pre id="importErrors"></pre>
+<button id="run" disabled>Получить данные</button> <button id="stop" disabled class="secondary">Остановить после текущего пакета</button></section>
+<section><div class="resultHeading"><h2>3. Результаты</h2><div><button id="export" disabled class="secondary">Скачать Excel</button> <button id="json" disabled class="secondary">Скачать JSON</button></div></div>
+<p id="progress" role="status">Пока нет результатов.</p><div class="tableWrap"><table><thead><tr><th>cis</th><th>gtin</th><th>expirationDate</th><th>Ошибка</th></tr></thead><tbody id="results"></tbody></table></div></section>
+<p id="error" role="alert"></p><footer>Файл обрабатывается в браузере. На API отправляются только выбранные КИЗ. Закрытие вкладки останавливает обработку.</footer>
+</main><script src="vendor/xlsx.full.min.js"></script><script type="module" src="app.js"></script></body></html>

@@ -1,0 +1,11 @@
+import {cp, mkdir, readFile} from 'node:fs/promises';
+const root = new URL('../', import.meta.url);
+const dest = new URL('dist/', root);
+await mkdir(dest, {recursive: true});
+await cp(new URL('extension/', root), dest, {recursive: true});
+await mkdir(new URL('vendor/', dest), {recursive: true});
+await cp(new URL('node_modules/@e965/xlsx/dist/xlsx.full.min.js', root), new URL('vendor/xlsx.full.min.js', dest));
+await cp(new URL('node_modules/@e965/xlsx/LICENSE', root), new URL('vendor/XLSX-LICENSE.txt', dest));
+const manifest = JSON.parse(await readFile(new URL('manifest.json', dest)));
+if (manifest.manifest_version !== 3) throw new Error('Expected Manifest V3');
+console.log('Расширение собрано в dist/. Загрузите эту папку через chrome://extensions.');

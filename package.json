@@ -1,0 +1,19 @@
+{
+  "name": "kiz-scanning-extension",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test tests/*.test.js",
+    "check": "npm test && npm run build",
+    "test:e2e": "npm run build && node scripts/e2e.mjs",
+    "test:ui": "npm run build && node scripts/ui-test.mjs"
+  },
+  "dependencies": {
+    "@e965/xlsx": "0.20.3"
+  },
+  "devDependencies": {
+    "playwright": "1.64.1"
+  }
+}
