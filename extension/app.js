@@ -6,7 +6,10 @@ const send = async message => {
   if (!reply?.ok) throw new Error(reply?.error || 'Нет ответа от расширения.');
   return reply.value;
 };
-function error(e) { $('error').textContent = e?.message || String(e); }
+function diagnostic(event, details = {}) { send({type: 'diagnostic', event, details}).catch(() => {}); }
+window.addEventListener('error', () => diagnostic('ui.unhandled_error'));
+window.addEventListener('unhandledrejection', () => diagnostic('ui.unhandled_error'));
+function error(e) { diagnostic('ui.error', {errorKind: e?.name || 'Error'}); $('error').textContent = e?.message || String(e); }
 function controls() {
   $('run').disabled = busy || importing || !codes.length;
   for (const id of ['file', 'header']) $(id).disabled = busy || importing;
@@ -49,6 +52,7 @@ function selectSheet() {
 }
 function importCodes() {
   const parsed = extractCodes(rows, Number($('column').value), $('header').checked);
+  diagnostic('file.imported', {count: parsed.codes.length});
   codes = parsed.codes; results = []; render();
   $('fileStatus').textContent = `Уникальных КИЗ: ${codes.length}. Ошибок: ${parsed.errors.length}.`;
   $('importErrors').textContent = parsed.errors.slice(0, 100).join('\n') + (parsed.errors.length > 100 ? '\nПоказаны первые 100 ошибок.' : '');
@@ -82,6 +86,7 @@ function render() {
   controls();
 }
 $('run').onclick = async () => {
+  diagnostic('query.started', {count: codes.length});
   busy = true; stopping = false; results = []; $('error').textContent = ''; controls();
   try {
     if (!(await send({type: 'status'})).valid) throw new Error('Сначала авторизуйтесь через КриптоПро.');
@@ -94,14 +99,33 @@ $('run').onclick = async () => {
   } catch (e) { error(e); $('progress').textContent = `Обработка прервана. Сохранено ${results.length} из ${codes.length}; доступен экспорт частичных результатов.`; }
   finally { busy = false; controls(); await status().catch(error); }
 };
-$('stop').onclick = () => { stopping = true; controls(); };
+$('stop').onclick = () => { stopping = true; diagnostic('query.stopped'); controls(); };
 $('export').onclick = () => {
+  diagnostic('export.xlsx', {count: results.length});
   const book = XLSX.utils.book_new();
   const sheet = XLSX.utils.json_to_sheet(results, {header: ['cis', 'gtin', 'expirationDate', 'error']});
   XLSX.utils.book_append_sheet(book, sheet, 'КИЗ'); XLSX.writeFile(book, 'kiz-results.xlsx');
 };
 $('json').onclick = () => {
+  diagnostic('export.json', {count: results.length});
   const url = URL.createObjectURL(new Blob([JSON.stringify(results, null, 2)], {type: 'application/json'}));
   const a = document.createElement('a'); a.href = url; a.download = 'kiz-results.json'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 status().catch(error);
+
+$('downloadLog').onclick = async () => {
+  try {
+    const {diagnosticLog = []} = await chrome.storage.local.get('diagnosticLog');
+    const manifest = chrome.runtime.getManifest();
+    const report = {exportedAt: new Date().toISOString(), version: manifest.version, browser: navigator.userAgent,
+      capabilities: {localAccessControl: typeof chrome.storage.local.setAccessLevel === 'function', sessionStorage: !!chrome.storage.session}, events: diagnosticLog};
+    const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], {type: 'application/json'}));
+    const a = document.createElement('a'); a.href = url; a.download = `kiz-log-${new Date().toISOString().replace(/[:.]/g, '-')}.json`; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    $('logStatus').textContent = `Выгружено событий: ${diagnosticLog.length}.`;
+  } catch (e) { error(e); }
+};
+$('clearLog').onclick = async () => {
+  try { await send({type: 'clearLogs'}); $('logStatus').textContent = 'Журнал очищен.'; } catch (e) { error(e); }
+};
+diagnostic('ui.started');

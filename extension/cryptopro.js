@@ -4,8 +4,10 @@
     if (!result?.ok) throw new Error(result?.error || 'Расширение недоступно.');
     return result.value;
   };
+  const log = event => send({type: 'diagnostic', event}).catch(() => {});
   let challenge;
   try { challenge = await send({type: 'challenge'}); } catch { return; }
+  log('signer.loaded');
   const host = document.createElement('div');
   const shadow = host.attachShadow({mode: 'closed'});
   const panel = document.createElement('section');
@@ -19,7 +21,8 @@
   const fill = document.createElement('button'); fill.textContent = 'Подставить данные для подписи';
   fill.onclick = () => {
     const field = document.getElementById('DataToSignTxtBox');
-    if (!field) { status.textContent = 'Поле страницы не найдено. Скопируйте данные из блока выше вручную в «Данные для подписи».'; return; }
+    if (!field) { log('signer.field_missing'); status.textContent = 'Поле страницы не найдено. Скопируйте данные из блока выше вручную в «Данные для подписи».'; return; }
+    log('signer.data_filled');
     field.value = challenge.data;
     field.dispatchEvent(new Event('input', {bubbles: true}));
     field.dispatchEvent(new Event('change', {bubbles: true}));
@@ -29,7 +32,7 @@
   submit.onclick = async () => {
     const field = document.getElementById('SignatureTxtBox');
     const signature = field?.value || field?.textContent;
-    if (!signature?.trim()) { status.textContent = 'Подпись не найдена. Скопируйте её в ручное поле на вкладке КИЗ.'; return; }
+    if (!signature?.trim()) { log('signer.signature_missing'); status.textContent = 'Подпись не найдена. Скопируйте её в ручное поле на вкладке КИЗ.'; return; }
     submit.disabled = true;
     try { await send({type: 'signature', signature}); status.textContent = 'Авторизация успешна. Вернитесь на вкладку КИЗ.'; fill.disabled = true; }
     catch (e) { status.textContent = e.message; submit.disabled = false; }

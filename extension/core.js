@@ -1,3 +1,4 @@
+import {record} from './diagnostics.js';
 export const TOKEN_TTL = 10 * 60 * 60 * 1000;
 export const API = 'https://markirovka.crpt.ru/api/v3/true-api';
 export const SIGN_PAGE = 'https://cryptopro.ru/sites/default/files/products/cades/demopage/cades_bes_sample.html';
@@ -11,11 +12,19 @@ export async function request(path, {body, token, fetchImpl = fetch} = {}) {
   const headers = {Accept: 'application/json'};
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (token) headers.Authorization = `Bearer ${token}`;
-  const response = await fetchImpl(`${API}${path}`, {
+  const started = Date.now();
+  await record('http.started', {operation: path});
+  let response;
+  try { response = await fetchImpl(`${API}${path}`, {
     method: body === undefined ? 'GET' : 'POST', headers,
     ...(body === undefined ? {} : {body: JSON.stringify(body)}),
     credentials: 'omit', cache: 'no-store', signal: AbortSignal.timeout(60000)
   });
+  } catch (error) {
+    await record('http.failed', {operation: path, durationMs: Date.now() - started, errorKind: error.name}, 'error');
+    throw error;
+  }
+  await record('http.completed', {operation: path, status: response.status, durationMs: Date.now() - started});
   if (!response.ok) {
     // Do not expose response bodies: auth endpoints may echo credentials.
     throw new ApiError(response.status, response.status === 401

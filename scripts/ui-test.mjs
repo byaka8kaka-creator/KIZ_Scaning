@@ -32,12 +32,13 @@ try {
   const page = await browser.newPage({acceptDownloads: true});
   const errors = []; page.on('pageerror', e => errors.push(e.message));
   await page.exposeFunction('sendToBackground', data => message(data));
+  await page.exposeFunction('readDiagnosticLog', () => ({diagnosticLog: stores.local.diagnosticLog || []}));
   await page.addInitScript(() => {
-    window.chrome = {runtime: {sendMessage: data => window.sendToBackground(data)}, storage: {onChanged: {addListener() {}}}};
+    window.chrome = {runtime: {sendMessage: data => window.sendToBackground(data), getManifest: () => ({version: '1.0.1'})}, storage: {local: {get: () => window.readDiagnosticLog()}, onChanged: {addListener() {}}}};
   });
   await page.route('https://kiz.test/**', async route => {
     const path = new URL(route.request().url()).pathname.slice(1);
-    if (!['app.html', 'app.css', 'app.js', 'core.js', 'vendor/xlsx.full.min.js'].includes(path)) return route.abort();
+    if (!['app.html', 'app.css', 'app.js', 'core.js', 'diagnostics.js', 'vendor/xlsx.full.min.js'].includes(path)) return route.abort();
     await route.fulfill({body: await readFile(new URL('../dist/' + path, import.meta.url)), contentType: path.endsWith('.js') ? 'text/javascript' : path.endsWith('.css') ? 'text/css' : 'text/html'});
   });
   await page.goto('https://kiz.test/app.html');
@@ -107,6 +108,19 @@ try {
   await panelClick('Передать готовую подпись в КИЗ');
   await signer.waitForFunction(() => window.signerMessage({type: 'challenge'}).then(r => !r.ok));
   assert.equal(stores.local.auth.token, 'test-token');
+  const logPromise = page.waitForEvent('download');
+  await page.locator('#downloadLog').click();
+  const logDownload = await logPromise;
+  const logText = await readFile(await logDownload.path(), 'utf8');
+  const report = JSON.parse(logText);
+  assert.ok(report.events.some(e => e.event === 'http.completed'));
+  assert.equal(logText.includes('test-token'), false);
+  assert.equal(logText.includes('challenge-data'), false);
+  assert.equal(logText.includes(code), false);
+  assert.equal(logText.includes('A'.repeat(100)), false);
+  await page.locator('#clearLog').click();
+  await page.getByText('Журнал очищен.').waitFor();
+  assert.deepEqual(stores.local.diagnosticLog, []);
   assert.deepEqual(errors, []);
   console.log('PASS: real Chromium UI + background logic with mocked Chrome APIs/HTTP: XLS/XLSX, signing payload, token reuse/expiry, 403 retention, 401 reset, Excel export, sender validation, CryptoPro DOM bridge (fixture).');
 } finally { await browser.close(); }

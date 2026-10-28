@@ -1,20 +1,28 @@
 import {TOKEN_TTL, SIGN_PAGE, tokenValid, request, parseResults} from './core.js';
-chrome.storage.local.setAccessLevel({accessLevel: 'TRUSTED_CONTEXTS'});
-chrome.storage.session.setAccessLevel({accessLevel: 'TRUSTED_CONTEXTS'});
-chrome.action.onClicked.addListener(() => chrome.tabs.create({url: chrome.runtime.getURL('app.html')}));
+import {configureAccess, record} from './diagnostics.js';
+// Register listeners synchronously. Optional compatibility features must never stop startup.
+const challengeStorage = chrome.storage.session || chrome.storage.local;
+const initialization = configureAccess().catch(() => {});
+chrome.action.onClicked.addListener(async () => {
+  await record('app.open_requested');
+  try { await chrome.tabs.create({url: chrome.runtime.getURL('app.html')}); await record('app.opened'); }
+  catch (error) { await record('app.open_failed', {errorKind: error.name}, 'error'); }
+});
+globalThis.addEventListener?.('error', () => { void record('worker.unhandled_error', {}, 'error'); });
+globalThis.addEventListener?.('unhandledrejection', () => { void record('worker.unhandled_rejection', {}, 'error'); });
 let authOperation = null;
 async function authState() {
   const {auth} = await chrome.storage.local.get('auth');
   return {valid: tokenValid(auth), expiresAt: tokenValid(auth) ? auth.expiresAt : null};
 }
 async function begin() {
-  if ((await authState()).valid) return authState();
-  const existing = (await chrome.storage.session.get('challenge')).challenge;
+  if ((await authState()).valid) { await record('auth.token_reused'); return authState(); }
+  const existing = (await challengeStorage.get('challenge')).challenge;
   if (existing && existing.createdAt + 5 * 60 * 1000 > Date.now()) {
     try { await chrome.tabs.update(existing.tabId, {active: true}); }
     catch {
       const tab = await chrome.tabs.create({url: 'about:blank'});
-      await chrome.storage.session.set({challenge: {...existing, tabId: tab.id}});
+      await challengeStorage.set({challenge: {...existing, tabId: tab.id}});
       await chrome.tabs.update(tab.id, {url: SIGN_PAGE});
     }
     return {pending: true};
@@ -24,13 +32,13 @@ async function begin() {
     throw new Error('В ответе auth/key отсутствуют uuid или data.');
   }
   const tab = await chrome.tabs.create({url: 'about:blank'});
-  await chrome.storage.session.set({challenge: {...challenge, tabId: tab.id, createdAt: Date.now()}});
+  await challengeStorage.set({challenge: {...challenge, tabId: tab.id, createdAt: Date.now()}});
   await chrome.tabs.update(tab.id, {url: SIGN_PAGE});
   return {pending: true};
 }
 async function signIn(signature) {
-  if ((await authState()).valid) return authState();
-  const {challenge} = await chrome.storage.session.get('challenge');
+  if ((await authState()).valid) { await record('auth.token_reused'); return authState(); }
+  const {challenge} = await challengeStorage.get('challenge');
   if (!challenge || challenge.createdAt + 5 * 60 * 1000 <= Date.now()) {
     throw new Error('Запрос подписи истёк. Нажмите «Авторизоваться» ещё раз.');
   }
@@ -41,8 +49,9 @@ async function signIn(signature) {
   const issuedAt = Date.now();
   const response = await request('/auth/simpleSignIn', {body: {uuid: challenge.uuid, data}});
   if (typeof response.token !== 'string' || !response.token) throw new Error('API не вернул token.');
+  await record('auth.succeeded');
   await chrome.storage.local.set({auth: {token: response.token, expiresAt: issuedAt + TOKEN_TTL}});
-  await chrome.storage.session.remove('challenge');
+  await challengeStorage.remove('challenge');
   return authState();
 }
 async function handle(message, sender) {
@@ -50,13 +59,20 @@ async function handle(message, sender) {
   const isSigner = sender.url?.split('?')[0].split('#')[0] === SIGN_PAGE;
   if (!isApp && !isSigner) throw new Error('Недопустимый источник сообщения.');
   if (isSigner) {
-    const {challenge} = await chrome.storage.session.get('challenge');
+    const {challenge} = await challengeStorage.get('challenge');
     if (!challenge || sender.tab?.id !== challenge.tabId) throw new Error('Нет активного запроса подписи для этой вкладки.');
+    if (message.type === 'diagnostic' && ['signer.loaded', 'signer.field_missing', 'signer.data_filled', 'signer.signature_missing'].includes(message.event)) { await record(message.event); return {}; }
     if (message.type === 'challenge') return {data: challenge.data};
     if (message.type === 'signature') return exclusive(() => signIn(message.signature));
     throw new Error('Недопустимая команда.');
   }
   switch (message.type) {
+    case 'diagnostic': {
+      const allowed = ['ui.started', 'ui.error', 'file.imported', 'file.import_failed', 'query.started', 'query.stopped', 'export.xlsx', 'export.json', 'ui.unhandled_error'];
+      if (allowed.includes(message.event)) await record(message.event, message.details);
+      return {};
+    }
+    case 'clearLogs': await chrome.storage.local.set({diagnosticLog: []}); return {};
     case 'status': return authState();
     case 'begin': return exclusive(begin);
     case 'signature': return exclusive(() => signIn(message.signature));
@@ -70,6 +86,7 @@ async function handle(message, sender) {
       try { return parseResults(await request('/cises/info', {body: codes, token: auth.token}), codes); }
       catch (error) {
         if (error.status === 401) {
+          await record('auth.token_rejected', {status: 401}, 'warn');
           const current = (await chrome.storage.local.get('auth')).auth;
           if (current?.token === auth.token) await chrome.storage.local.remove('auth');
         }
@@ -84,6 +101,14 @@ function exclusive(fn) {
   return authOperation;
 }
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
-  handle(message, sender).then(value => reply({ok: true, value}), error => reply({ok: false, error: error.message || 'Ошибка операции.'}));
+  const started = Date.now();
+  const operation = ['status', 'begin', 'signature', 'query', 'challenge', 'diagnostic', 'clearLogs'].includes(message?.type) ? message.type : 'unknown';
+  initialization.then(() => handle(message, sender)).then(async value => {
+    if (!['status', 'diagnostic', 'clearLogs'].includes(operation)) await record('operation.completed', {operation, durationMs: Date.now() - started, count: Array.isArray(value) ? value.length : 0});
+    reply({ok: true, value});
+  }, async error => {
+    await record('operation.failed', {operation, durationMs: Date.now() - started, status: error.status, errorKind: error.name}, 'error');
+    reply({ok: false, error: error.message || 'Ошибка операции.'});
+  });
   return true;
 });
