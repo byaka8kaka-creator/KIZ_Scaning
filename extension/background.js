@@ -13,28 +13,65 @@ globalThis.addEventListener?.('unhandledrejection', () => { void record('worker.
 let authOperation = null;
 async function authState() {
   const {auth} = await chrome.storage.local.get('auth');
-  return {valid: tokenValid(auth), expiresAt: tokenValid(auth) ? auth.expiresAt : null};
+  const {automaticAuth} = await chrome.storage.local.get('automaticAuth');
+  return {valid: tokenValid(auth), expiresAt: tokenValid(auth) ? auth.expiresAt : null, automaticAuth};
 }
-async function begin() {
+async function closeAutomatic(challenge) {
+  if (challenge?.automatic && Number.isInteger(challenge.windowId)) {
+    await chrome.windows.remove(challenge.windowId).catch(() => {});
+  }
+  await chrome.alarms.clear('automatic-auth');
+}
+async function failAutomatic(reason) {
+  const {challenge} = await challengeStorage.get('challenge');
+  if (!challenge?.automatic) return;
+  await chrome.storage.local.set({automaticAuth: {state: 'failed', reason}});
+  await record('auth.auto_failed', {operation: reason}, 'error');
+  await challengeStorage.remove('challenge');
+  await closeAutomatic(challenge);
+}
+chrome.alarms?.onAlarm.addListener(alarm => {
+  if (alarm.name === 'automatic-auth') void failAutomatic('timeout');
+});
+async function begin(automatic = false) {
   if ((await authState()).valid) { await record('auth.token_reused'); return authState(); }
   const existing = (await challengeStorage.get('challenge')).challenge;
-  if (existing && existing.createdAt + 5 * 60 * 1000 > Date.now()) {
-    try { await chrome.tabs.update(existing.tabId, {active: true}); }
-    catch {
-      const tab = await chrome.tabs.create({url: 'about:blank'});
-      await challengeStorage.set({challenge: {...existing, tabId: tab.id}});
-      await chrome.tabs.update(tab.id, {url: SIGN_PAGE});
+  if (existing?.automatic) {
+    if (automatic && existing.createdAt + 150000 > Date.now()) return {pending: true, automatic: true};
+    await closeAutomatic(existing);
+    await challengeStorage.remove('challenge');
+  } else if (!automatic && existing && existing.createdAt + 5 * 60 * 1000 > Date.now()) {
+    try { await chrome.tabs.update(existing.tabId, {active: true}); return {pending: true}; }
+    catch { await challengeStorage.remove('challenge'); }
+  }
+  await chrome.storage.local.set({automaticAuth: {state: automatic ? 'running' : 'idle'}});
+  try {
+    const challenge = await request('/auth/key');
+    if (typeof challenge.uuid !== 'string' || !challenge.uuid || typeof challenge.data !== 'string' || !challenge.data) {
+      throw new Error('В ответе auth/key отсутствуют uuid или data.');
     }
-    return {pending: true};
+    let tab, windowId;
+    if (automatic) {
+      const window = await chrome.windows.create({url: 'about:blank', type: 'popup', state: 'minimized', focused: false});
+      windowId = window.id; tab = window.tabs?.[0];
+      if (!Number.isInteger(tab?.id)) {
+        await chrome.windows.remove(windowId).catch(() => {});
+        throw new Error('Не удалось создать окно автоматической авторизации.');
+      }
+    } else tab = await chrome.tabs.create({url: 'about:blank'});
+    const pending = {...challenge, tabId: tab.id, windowId, automatic, createdAt: Date.now()};
+    await challengeStorage.set({challenge: pending});
+    if (automatic) await chrome.alarms.create('automatic-auth', {delayInMinutes: 2.5});
+    await chrome.tabs.update(tab.id, {url: SIGN_PAGE});
+    await record(automatic ? 'auth.auto_started' : 'auth.manual_started');
+    return {pending: true, automatic};
+  } catch (error) {
+    if (automatic) {
+      await failAutomatic('startup');
+      await chrome.storage.local.set({automaticAuth: {state: 'failed', reason: 'startup'}});
+    }
+    throw error;
   }
-  const challenge = await request('/auth/key');
-  if (typeof challenge.uuid !== 'string' || !challenge.uuid || typeof challenge.data !== 'string' || !challenge.data) {
-    throw new Error('В ответе auth/key отсутствуют uuid или data.');
-  }
-  const tab = await chrome.tabs.create({url: 'about:blank'});
-  await challengeStorage.set({challenge: {...challenge, tabId: tab.id, createdAt: Date.now()}});
-  await chrome.tabs.update(tab.id, {url: SIGN_PAGE});
-  return {pending: true};
 }
 async function signIn(signature) {
   if ((await authState()).valid) { await record('auth.token_reused'); return authState(); }
@@ -52,6 +89,11 @@ async function signIn(signature) {
   await record('auth.succeeded');
   await chrome.storage.local.set({auth: {token: response.token, expiresAt: issuedAt + TOKEN_TTL}});
   await challengeStorage.remove('challenge');
+  if (challenge.automatic) {
+    await chrome.storage.local.set({automaticAuth: {state: 'success'}});
+    await record('auth.auto_succeeded');
+    await closeAutomatic(challenge);
+  }
   return authState();
 }
 async function handle(message, sender) {
@@ -61,8 +103,12 @@ async function handle(message, sender) {
   if (isSigner) {
     const {challenge} = await challengeStorage.get('challenge');
     if (!challenge || sender.tab?.id !== challenge.tabId) throw new Error('Нет активного запроса подписи для этой вкладки.');
-    if (message.type === 'diagnostic' && ['signer.loaded', 'signer.field_missing', 'signer.data_filled', 'signer.signature_missing'].includes(message.event)) { await record(message.event); return {}; }
-    if (message.type === 'challenge') return {data: challenge.data};
+    if (message.type === 'diagnostic' && ['signer.loaded', 'signer.field_missing', 'signer.data_filled', 'signer.signature_missing', 'signer.auto_selected', 'signer.auto_signing'].includes(message.event)) { await record(message.event); return {}; }
+    if (message.type === 'autoFailure' && challenge.automatic) {
+      const reason = ['certificate', 'fields', 'signature', 'signing'].includes(message.reason) ? message.reason : 'signing';
+      await failAutomatic(reason); return {};
+    }
+    if (message.type === 'challenge') return {data: challenge.data, automatic: !!challenge.automatic};
     if (message.type === 'signature') return exclusive(() => signIn(message.signature));
     throw new Error('Недопустимая команда.');
   }
@@ -74,7 +120,7 @@ async function handle(message, sender) {
     }
     case 'clearLogs': await chrome.storage.local.set({diagnosticLog: []}); return {};
     case 'status': return authState();
-    case 'begin': return exclusive(begin);
+    case 'begin': return exclusive(() => begin(message.automatic === true));
     case 'signature': return exclusive(() => signIn(message.signature));
     case 'query': {
       const codes = message.codes;
@@ -102,7 +148,7 @@ function exclusive(fn) {
 }
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
   const started = Date.now();
-  const operation = ['status', 'begin', 'signature', 'query', 'challenge', 'diagnostic', 'clearLogs'].includes(message?.type) ? message.type : 'unknown';
+  const operation = ['status', 'begin', 'signature', 'query', 'challenge', 'diagnostic', 'clearLogs', 'autoFailure'].includes(message?.type) ? message.type : 'unknown';
   initialization.then(() => handle(message, sender)).then(async value => {
     if (!['status', 'diagnostic', 'clearLogs'].includes(operation)) await record('operation.completed', {operation, durationMs: Date.now() - started, count: Array.isArray(value) ? value.length : 0});
     reply({ok: true, value});

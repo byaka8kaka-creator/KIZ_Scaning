@@ -26,6 +26,9 @@ async function status() {
   const auth = await send({type: 'status'});
   $('authStatus').textContent = auth.valid ? `Авторизация действует до ${new Date(auth.expiresAt).toLocaleString('ru-RU')}.` : 'Требуется авторизация с электронной подписью.';
   $('login').disabled = auth.valid || busy;
+  $('autoLogin').disabled = auth.valid || busy || auth.automaticAuth?.state === 'running';
+  const reasons = {certificate: 'Не найден сертификат «Труфанова Лариса» с зелёной галочкой.', fields: 'Не найдены элементы страницы КриптоПро.', signature: 'Не получена подпись за отведённое время.', signing: 'Ошибка подписи или входа.', timeout: 'Истекло время ожидания. Проверьте КриптоПро и повторите вход.', startup: 'Не удалось запустить автоматическую авторизацию.'};
+  $('autoAuthStatus').textContent = auth.valid ? '' : auth.automaticAuth?.state === 'running' ? 'Автоматическая авторизация выполняется…' : auth.automaticAuth?.state === 'failed' ? (reasons[auth.automaticAuth.reason] || 'Автоматическая авторизация не выполнена.') + ' Можно повторить или использовать обычный вход.' : '';
   $('signIn').disabled = auth.valid || busy;
 }
 $('login').onclick = async () => {
@@ -41,7 +44,13 @@ $('signIn').onclick = async () => {
   try { await send({type: 'signature', signature: $('signature').value}); $('signature').value = ''; await status(); }
   catch (e) { error(e); $('signIn').disabled = false; }
 };
-chrome.storage.onChanged.addListener((changes, area) => { if (area === 'local' && changes.auth) status().catch(error); });
+$('autoLogin').onclick = async () => {
+  $('autoLogin').disabled = true; $('error').textContent = '';
+  try { await send({type: 'begin', automatic: true}); } catch (e) { error(e); }
+  finally { await status().catch(error); }
+};
+setInterval(() => { if ($('autoAuthStatus').textContent === 'Автоматическая авторизация выполняется…') status().catch(error); }, 2000);
+chrome.storage.onChanged.addListener((changes, area) => { if (area === 'local' && (changes.auth || changes.automaticAuth)) status().catch(error); });
 window.addEventListener('focus', () => status().catch(error));
 function selectSheet() {
   if (!workbook || !excelAvailable()) return;

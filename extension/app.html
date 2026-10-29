@@ -2,7 +2,7 @@
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Проверка КИЗ</title><link rel="stylesheet" href="app.css"></head>
 <body><main>
 <header><span class="badge">ЧЕСТНЫЙ ЗНАК · TRUE API</span><h1>Проверка сроков годности</h1><p>Загрузите Excel с кодами маркировки и получите данные о товарах.</p></header>
-<section><h2>1. Авторизация</h2><p id="authStatus" role="status">Проверяем авторизацию…</p><button id="login">Авторизоваться через КриптоПро</button>
+<section><h2>1. Авторизация</h2><p id="authStatus" role="status">Проверяем авторизацию…</p><button id="login">Авторизоваться через КриптоПро</button> <button id="autoLogin" class="secondary">Автоматическая авторизация через КриптоПро</button><p id="autoAuthStatus" role="status"></p><p class="hint">Автоматически выбирается первый сверху сертификат «Труфанова Лариса» с зелёной галочкой. Процесс выполняется в свёрнутом окне. КриптоПро может запросить PIN или разрешение на использование ключа.</p>
 <p class="hint">Откроется страница КриптоПро. Выберите свой сертификат и подпишите данные. Токен используется повторно в течение 10 часов.</p>
 <details><summary>Вставить подпись вручную</summary><p>После начала авторизации скопируйте готовую подпись со страницы КриптоПро.</p><textarea id="signature" aria-label="Подпись Base64" placeholder="Подпись в Base64" spellcheck="false"></textarea><button id="signIn">Отправить подпись</button></details></section>
 <section><h2>2. Загрузка КИЗ</h2><button id="scan" type="button">Сканировать</button><p id="manualStatus" role="status">Вручную добавлено: 0.</p>

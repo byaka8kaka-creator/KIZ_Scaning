@@ -8,6 +8,9 @@ const stores = {local: {}, session: {}};
 let listener;
 const calls = [];
 let failStatus = 0;
+const automaticWindows = [], removedWindows = [];
+let alarmListener;
+const alarms = new Map();
 const storage = Object.fromEntries(Object.entries(stores).map(([name, data]) => [name, {
   setAccessLevel: async () => {},
   get: async key => ({[key]: data[key]}), set: async values => Object.assign(data, values),
@@ -15,6 +18,8 @@ const storage = Object.fromEntries(Object.entries(stores).map(([name, data]) => 
 }]));
 globalThis.chrome = {
   storage, action: {onClicked: {addListener() {}}},
+  windows: {create: async options => {automaticWindows.push(options); return {id: 7, tabs: [{id: 42}]};}, remove: async id => {removedWindows.push(id);}},
+  alarms: {create: async (name, options) => {alarms.set(name, options);}, clear: async name => alarms.delete(name), onAlarm: {addListener(fn) {alarmListener = fn;}}},
   tabs: {create: async () => ({id: 42}), update: async () => ({id: 42})},
   runtime: {getURL: path => `https://kiz.test/${path}`, onMessage: {addListener(fn) {listener = fn;}}}
 };
@@ -163,6 +168,59 @@ try {
     assert.equal(await page.locator('#sheet').inputValue() !== '', true);
     assert.equal(await page.locator('#column').inputValue(), '0');
   }
+  // Automatic mode: first valid Larisa in visual list order, no manual clicks.
+  stores.local.auth.expiresAt = Date.now() - 1;
+  await message({type: 'begin', automatic: true});
+  assert.deepEqual(automaticWindows[0], {url: 'about:blank', type: 'popup', state: 'minimized', focused: false});
+  assert.ok(alarms.has('automatic-auth'));
+  await signer.route('https://cryptopro.ru/**', route => route.fulfill({contentType: 'text/html', body: `<html><head><meta charset="utf-8"></head><body>
+    <select id="CertListBox"><option value="expired">❌Труфанова Лариса</option><option value="other">✅Труфанов Вячеслав</option><option value="first">✅CN=Труфанова Лариса Анатольевна; первый</option><option value="second">✅Труфанова Лариса; второй</option></select>
+    <label><input id="detached" type="checkbox" checked>Отделенная подпись</label><label><input id="verify" type="checkbox" checked>Проверять подписанта</label>
+    <textarea id="DataToSignTxtBox">Hello World</textarea><button id="sign">Подписать</button><textarea id="SignatureTxtBox"></textarea></body></html>`}));
+  await signer.reload();
+  await signer.evaluate(() => {
+    window.chrome = {runtime: {sendMessage: data => window.signerMessage(data)}};
+    document.getElementById('sign').onclick = () => {
+      window.signedWith = document.getElementById('CertListBox').value;
+      window.signedData = document.getElementById('DataToSignTxtBox').value;
+      window.detachedAtSign = document.getElementById('detached').checked;
+      window.verifyAtSign = document.getElementById('verify').checked;
+      document.getElementById('SignatureTxtBox').value = 'C'.repeat(100);
+    };
+  });
+  await signer.addScriptTag({path: new URL('../extension/cryptopro.js', import.meta.url).pathname});
+  await signer.waitForFunction(() => window.signerMessage({type: 'challenge'}).then(r => !r.ok));
+  assert.deepEqual(await signer.evaluate(() => [signedWith, signedData, detachedAtSign, verifyAtSign]), ['first', 'challenge-data', false, false]);
+  assert.equal(stores.local.automaticAuth.state, 'success');
+  assert.equal(removedWindows.at(-1), 7);
+  assert.equal(alarms.has('automatic-auth'), false);
+  const windowCount = automaticWindows.length;
+  await message({type: 'begin', automatic: true});
+  assert.equal(automaticWindows.length, windowCount); // Existing 10-hour token reused.
+  stores.local.auth.expiresAt = Date.now() - 1;
+  await message({type: 'begin', automatic: true});
+  // A Larisa without a green check must never be used.
+  await signer.reload();
+  await signer.clock.install();
+  await signer.evaluate(() => {
+    for (const option of document.querySelectorAll('option')) option.textContent = option.textContent.replaceAll('✅', '❌');
+    window.chrome = {runtime: {sendMessage: async data => {
+      const result = await window.signerMessage(data);
+      if (data.type === 'challenge') window.challengeReceived = true;
+      return result;
+    }}};
+  });
+  await signer.addScriptTag({path: new URL('../extension/cryptopro.js', import.meta.url).pathname});
+  await signer.waitForFunction(() => window.challengeReceived);
+  await signer.clock.runFor(46000);
+  await page.waitForFunction(() => window.sendToBackground({type: 'status'}).then(r => r.value.automaticAuth.state === 'failed'));
+  assert.equal(stores.local.automaticAuth.reason, 'certificate');
+  await signer.clock.resume();
+  await message({type: 'begin', automatic: true});
+  alarmListener({name: 'automatic-auth'});
+  await page.waitForFunction(() => window.sendToBackground({type: 'status'}).then(r => r.value.automaticAuth.state === 'failed'));
+  assert.equal(stores.local.automaticAuth.reason, 'timeout');
+  assert.equal(stores.session.challenge, undefined);
   const logPromise = page.waitForEvent('download');
   await page.locator('#downloadLog').click();
   const logDownload = await logPromise;
