@@ -10,9 +10,10 @@ function diagnostic(event, details = {}) { send({type: 'diagnostic', event, deta
 window.addEventListener('error', () => diagnostic('ui.unhandled_error'));
 window.addEventListener('unhandledrejection', () => diagnostic('ui.unhandled_error'));
 function error(e) { diagnostic('ui.error', {errorKind: e?.name || 'Error'}); $('error').textContent = e?.message || String(e); }
+function excelAvailable() { return typeof globalThis.XLSX?.read === 'function'; }
 function controls() {
-  $('run').disabled = busy || importing || !codes.length;
-  for (const id of ['file', 'header']) $(id).disabled = busy || importing;
+  $('run').disabled = busy || importing || !excelAvailable() || !codes.length;
+  for (const id of ['file', 'header']) $(id).disabled = busy || importing || !excelAvailable();
   for (const id of ['sheet', 'column']) $(id).disabled = busy || importing || !workbook;
   for (const id of ['export', 'json']) $(id).disabled = !results.length;
   $('stop').disabled = !busy || stopping;
@@ -39,24 +40,30 @@ $('signIn').onclick = async () => {
 chrome.storage.onChanged.addListener((changes, area) => { if (area === 'local' && changes.auth) status().catch(error); });
 window.addEventListener('focus', () => status().catch(error));
 function selectSheet() {
+  if (!workbook || !excelAvailable()) return;
+  if ($('sheet').selectedIndex < 0) $('sheet').selectedIndex = 0;
   const sheet = workbook.Sheets[$('sheet').value];
+  if (!sheet) throw new Error('Лист не выбран или не найден в книге.');
   rows = XLSX.utils.sheet_to_json(sheet, {header: 1, raw: true, defval: '', blankrows: true});
-  const width = Math.max(0, ...rows.slice(0, 100).map(r => r.length));
+  const width = Math.max(0, ...rows.map(r => r.length));
   $('column').replaceChildren();
   for (let i = 0; i < width; i++) {
     const option = document.createElement('option'); option.value = i;
     option.textContent = `${XLSX.utils.encode_col(i)} — ${String(rows[0]?.[i] ?? '').slice(0, 60)}`;
     $('column').append(option);
   }
+  $('column').selectedIndex = width ? 0 : -1;
+  $('header').checked = !/^\s*01\d{14}21/.test(String(rows[0]?.[0] ?? ''));
   importCodes();
 }
 function importCodes() {
+  if (!workbook || !excelAvailable()) return;
   const parsed = extractCodes(rows, Number($('column').value), $('header').checked);
-  diagnostic('file.imported', {count: parsed.codes.length});
+  diagnostic('file.imported', {count: parsed.codes.length, rowCount: rows.length, columnCount: $('column').options.length, sheetCount: workbook.SheetNames.length, errorCount: parsed.errors.length, columnIndex: $('column').selectedIndex, hasHeader: $('header').checked});
   codes = parsed.codes; results = []; render();
   $('fileStatus').textContent = `Уникальных КИЗ: ${codes.length}. Ошибок: ${parsed.errors.length}.`;
   $('importErrors').textContent = parsed.errors.slice(0, 100).join('\n') + (parsed.errors.length > 100 ? '\nПоказаны первые 100 ошибок.' : '');
-  $('progress').textContent = 'Готово к запросу.'; controls();
+  $('progress').textContent = codes.length ? 'Готово к запросу.' : 'Нет КИЗ для запроса. Выберите лист и столбец с кодами, проверьте флажок заголовка и ошибки импорта.'; controls();
 }
 $('file').onchange = async () => {
   const file = $('file').files[0]; if (!file) return;
@@ -65,12 +72,14 @@ $('file').onchange = async () => {
   try {
     if (!/\.(xlsx|xls)$/i.test(file.name)) throw new Error('Выберите файл .xls или .xlsx.');
     if (file.size > 20 * 1024 * 1024) throw new Error('Максимальный размер файла — 20 МБ.');
+    if (!excelAvailable()) throw new Error('Библиотека Excel не загружена. Обновите расширение полной папкой из архива, включая vendor.');
     const next = XLSX.read(await file.arrayBuffer(), {type: 'array', cellDates: false});
     if (!next.SheetNames.length) throw new Error('В книге нет листов.');
     workbook = next; $('sheet').replaceChildren();
     for (const name of workbook.SheetNames) { const option = document.createElement('option'); option.value = name; option.textContent = name; $('sheet').append(option); }
+    $('sheet').selectedIndex = 0;
     selectSheet();
-  } catch (e) { workbook = undefined; $('fileStatus').textContent = 'Файл не загружен.'; error(e); }
+  } catch (e) { workbook = undefined; rows = []; codes = []; $('sheet').replaceChildren(); $('column').replaceChildren(); $('importErrors').textContent = ''; $('fileStatus').textContent = 'Файл не загружен.'; $('progress').textContent = 'Импорт не выполнен. Исправьте ошибку и загрузите файл повторно.'; diagnostic('file.import_failed', {errorKind: e.name}); error(e); }
   finally { importing = false; controls(); }
 };
 $('sheet').onchange = () => { try { selectSheet(); } catch (e) { error(e); } };
@@ -129,3 +138,10 @@ $('clearLog').onclick = async () => {
   try { await send({type: 'clearLogs'}); $('logStatus').textContent = 'Журнал очищен.'; } catch (e) { error(e); }
 };
 diagnostic('ui.started');
+
+if (!excelAvailable()) {
+  diagnostic('file.library_missing');
+  $('fileStatus').textContent = 'Чтение Excel недоступно: библиотека не загружена.';
+  error(new Error('Библиотека Excel не загружена. Замените папку расширения целиком, включая vendor, и нажмите «Обновить» в chrome://extensions.'));
+}
+controls();

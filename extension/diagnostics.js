@@ -1,5 +1,5 @@
 // Structured metadata only: never store arbitrary messages, HTTP bodies or user input.
-const KEYS = new Set(['operation', 'durationMs', 'status', 'count', 'valid', 'localAccessControl', 'sessionAccessControl', 'sessionStorage', 'errorKind']);
+const KEYS = new Set(['operation', 'durationMs', 'status', 'count', 'valid', 'localAccessControl', 'sessionAccessControl', 'sessionStorage', 'errorKind', 'rowCount', 'columnCount', 'sheetCount', 'errorCount', 'columnIndex', 'hasHeader']);
 let pending = Promise.resolve();
 export function safeDetails(details = {}) {
   return Object.fromEntries(Object.entries(details).filter(([key, value]) => KEYS.has(key) &&

@@ -39,7 +39,7 @@ try {
   await page.route('https://kiz.test/**', async route => {
     const path = new URL(route.request().url()).pathname.slice(1);
     if (!['app.html', 'app.css', 'app.js', 'core.js', 'diagnostics.js', 'vendor/xlsx.full.min.js'].includes(path)) return route.abort();
-    await route.fulfill({body: await readFile(new URL('../dist/' + path, import.meta.url)), contentType: path.endsWith('.js') ? 'text/javascript' : path.endsWith('.css') ? 'text/css' : 'text/html'});
+    await route.fulfill({body: await readFile(new URL('../' + (process.env.KIZ_TEST_SOURCE || 'dist') + '/' + path, import.meta.url)), contentType: path.endsWith('.js') ? 'text/javascript' : path.endsWith('.css') ? 'text/css' : 'text/html'});
   });
   await page.goto('https://kiz.test/app.html');
   await page.getByText('Требуется авторизация с электронной подписью.').waitFor();
@@ -108,6 +108,14 @@ try {
   await panelClick('Передать готовую подпись в КИЗ');
   await signer.waitForFunction(() => window.signerMessage({type: 'challenge'}).then(r => !r.ok));
   assert.equal(stores.local.auth.token, 'test-token');
+  if (process.env.KIZ_TEST_WORKBOOK) {
+    await page.locator('#file').setInputFiles(process.env.KIZ_TEST_WORKBOOK);
+    await page.getByText('Уникальных КИЗ: 8. Ошибок: 0.').waitFor();
+    assert.equal(await page.locator('#header').isChecked(), false);
+    assert.equal(await page.locator('#run').isEnabled(), true);
+    assert.equal(await page.locator('#sheet').inputValue() !== '', true);
+    assert.equal(await page.locator('#column').inputValue(), '0');
+  }
   const logPromise = page.waitForEvent('download');
   await page.locator('#downloadLog').click();
   const logDownload = await logPromise;
@@ -122,5 +130,11 @@ try {
   await page.getByText('Журнал очищен.').waitFor();
   assert.deepEqual(stores.local.diagnosticLog, []);
   assert.deepEqual(errors, []);
+  await page.route('https://kiz.test/vendor/xlsx.full.min.js', route => route.abort());
+  await page.reload();
+  await page.locator('#error').filter({hasText: 'Библиотека Excel не загружена'}).waitFor();
+  assert.equal(await page.locator('#file').isDisabled(), true);
+  assert.equal(await page.locator('#run').isDisabled(), true);
+  assert.equal(await page.locator('#progress').innerText(), 'Пока нет результатов.');
   console.log('PASS: real Chromium UI + background logic with mocked Chrome APIs/HTTP: XLS/XLSX, signing payload, token reuse/expiry, 403 retention, 401 reset, Excel export, sender validation, CryptoPro DOM bridge (fixture).');
 } finally { await browser.close(); }
