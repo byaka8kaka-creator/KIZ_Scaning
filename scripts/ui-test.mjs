@@ -78,15 +78,15 @@ try {
   await page.getByText('Отсканирован не КИЗ:', {exact: false}).waitFor();
   assert.equal(await page.locator('#commentHistory option').count(), 0);
   assert.equal(await page.locator('#run').isDisabled(), true);
-  const scanned = '0104650096358972215xjGAn';
+  const scanned = '0104650096359269215&i88B';
   const scannedFull = scanned + '\u001d931CRy';
-  await page.locator('#scanInput').fill('0104650096358972215чоПФт\u001d931СКн');
+  await page.locator('#scanInput').fill('0104650096359269215?ш88И\u001d931СКн');
   await page.locator('#scanInput').press('Enter');
   await page.waitForFunction(() => document.querySelectorAll('#commentHistory option').length === 1);
   assert.equal(stores.local.recentScanComments[0], 'Партия А');
   assert.equal(await page.locator('#scanInput').inputValue(), '');
   assert.equal(await page.locator('#run').isEnabled(), true);
-  await page.locator('#scanInput').fill('0104650096358972215чоПФт\u001d931СКн');
+  await page.locator('#scanInput').fill('0104650096359269215?ш88И\u001d931СКн');
   await page.locator('#scanInput').press('Enter');
   await page.getByText('Этот КИЗ уже добавлен.', {exact: false}).waitFor();
   await page.locator('#closeScan').click();
@@ -132,6 +132,9 @@ try {
   const download = await downloadPromise;
   const exported = XLSX.read(await readFile(await download.path()), {type: 'buffer', cellNF: true});
   assert.equal(XLSX.utils.sheet_to_json(exported.Sheets['КИЗ'])[0].cis, code);
+  assert.equal(await page.locator('th').nth(3).textContent(), 'Срок годности');
+  assert.equal(exported.Sheets['КИЗ'].D1.v, 'Срок годности');
+  assert.equal(archiveBook.Sheets['КИЗ'].D1.v, 'Срок годности');
   const dateCell = exported.Sheets['КИЗ'].D2;
   assert.equal(XLSX.utils.sheet_to_json(exported.Sheets['КИЗ'])[0].cis_full, code + 'tail');
   assert.equal(dateCell.t, 'n');
@@ -150,7 +153,8 @@ try {
   await page.locator('#json').click();
   const jsonDownload = await jsonPromise;
   const jsonRows = JSON.parse(await readFile(await jsonDownload.path(), 'utf8'));
-  assert.equal(jsonRows[0].expirationDate, '05.10.2027');
+  assert.equal(jsonRows[0]['Срок годности'], '05.10.2027');
+  assert.equal('expirationDate' in jsonRows[0], false);
   assert.equal(jsonRows[0].cis_full, code + 'tail');
   assert.equal(jsonRows.length, 2);
   failStatus = 403;

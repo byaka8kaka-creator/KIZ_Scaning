@@ -34,10 +34,12 @@ export async function request(path, {body, token, fetchImpl = fetch} = {}) {
   try { return await response.json(); }
   catch { throw new Error('API вернул некорректный JSON.'); }
 }
-// Physical Russian keyboard keys -> Latin keys. Non-Russian characters, including GS, stay intact.
+// Physical Russian keyboard keys -> Latin keys. Shift+7 differs between layouts. GS stays intact.
 const ruKeys = 'ё1234567890-йцукенгшщзхъфывапролджэячсмитьбю';
 const enKeys = "`1234567890-qwertyuiop[]asdfghjkl;'zxcvbnm,.";
 export function correctKeyboardLayout(value) {
+  // Only translate punctuation when Cyrillic proves that the scan used Russian layout.
+  if (/[ёа-яЁА-Я]/.test(value)) value = value.replace(/\?/g, '&');
   return value.replace(/[ёа-яЁА-Я]/g, char => {
     const index = ruKeys.indexOf(char.toLowerCase());
     const replacement = enKeys[index];

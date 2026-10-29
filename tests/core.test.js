@@ -66,3 +66,14 @@ test('Russian scanner layout preserves case, full payload and GS; API receives 2
   assert.deepEqual(rows.map(r => r.cis_full), imported.fullCodes);
   assert.equal(rows.length, 2);
 });
+
+test('Russian Shift+7 maps question mark to ampersand without corrupting Latin scans', () => {
+  const raw = '0104650096359269215?ш88И';
+  const expected = '0104650096359269215&i88B';
+  assert.equal(correctKeyboardLayout(raw), expected);
+  assert.equal(correctKeyboardLayout(expected), expected);
+  assert.equal(correctKeyboardLayout('0104650096359269215?i88B'), '0104650096359269215?i88B');
+  const parsed = extractCodes([[raw]], 0, false);
+  assert.deepEqual(parsed.fullCodes, [expected]);
+  assert.deepEqual(parsed.codes, [expected.slice(0, 24)]);
+});

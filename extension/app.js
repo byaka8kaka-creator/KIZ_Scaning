@@ -150,6 +150,7 @@ function resultWorkbook() {
     const serial = excelExpirationDate(row.expirationDate);
     if (serial !== null) sheet[XLSX.utils.encode_cell({r: i + 1, c: 3})] = {t: 'n', v: serial, z: 'dd"."mm"."yyyy'};
   });
+  sheet.D1 = {t: 's', v: 'Срок годности'};
   sheet.E1 = {t: 's', v: 'Комментарий'};
   XLSX.utils.book_append_sheet(book, sheet, 'КИЗ'); return book;
 }
@@ -159,7 +160,7 @@ $('export').onclick = () => {
 };
 $('json').onclick = () => {
   diagnostic('export.json', {count: results.length});
-  const url = URL.createObjectURL(new Blob([JSON.stringify(results, null, 2)], {type: 'application/json'}));
+  const url = URL.createObjectURL(new Blob([JSON.stringify(results.map(({expirationDate, ...row}) => ({...row, 'Срок годности': expirationDate})), null, 2)], {type: 'application/json'}));
   const a = document.createElement('a'); a.href = url; a.download = 'kiz-results.json'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 status().catch(error);
