@@ -1,4 +1,9 @@
 import {extractCodes, excelExpirationDate, correctKeyboardLayout, attachFullCodes} from './core.js';
+import {Archive} from './archive.js';
+const archive = new Archive();
+let archiveReady = archive.restore().catch(() => false);
+const manualComments = new Map();
+let recentComments = [];
 const $ = id => document.getElementById(id);
 let workbook, rows = [], codes = [], results = [], busy = false, stopping = false, importing = false;
 let fileCodes = [];
@@ -19,6 +24,8 @@ function controls() {
   for (const id of ['sheet', 'column']) $(id).disabled = busy || importing || !workbook;
   for (const id of ['export', 'json']) $(id).disabled = !results.length;
   $('scan').disabled = busy || importing;
+  $('clearData').disabled = busy || importing;
+  $('chooseArchive').disabled = busy || importing;
   $('export').disabled = !results.length || !excelAvailable();
   $('stop').disabled = !busy || stopping;
 }
@@ -102,7 +109,7 @@ function render() {
   // Keep the view responsive; export always contains all rows.
   for (const row of results.slice(0, 1000)) {
     const tr = document.createElement('tr');
-    for (const key of ['cis', 'cis_full', 'gtin', 'expirationDate', 'error']) { const td = document.createElement('td'); td.textContent = row[key] ?? ''; tr.append(td); }
+    for (const key of ['cis', 'cis_full', 'gtin', 'expirationDate', 'comment', 'error']) { const td = document.createElement('td'); td.textContent = row[key] ?? ''; tr.append(td); }
     $('results').append(tr);
   }
   controls();
@@ -110,28 +117,45 @@ function render() {
 $('run').onclick = async () => {
   diagnostic('query.started', {count: codes.length});
   busy = true; stopping = false; results = []; $('error').textContent = ''; controls();
-  let processed = 0;
+  let processed = 0, receivedAt;
   try {
     if (!(await send({type: 'status'})).valid) throw new Error('Сначала авторизуйтесь через КриптоПро.');
     for (let i = 0; i < codes.length && !stopping; i += 100) {
       $('progress').textContent = `Запрос: ${i + 1}–${Math.min(i + 100, codes.length)} из ${codes.length}…`;
       const batch = await send({type: 'query', codes: codes.slice(i, i + 100)});
-      results.push(...attachFullCodes(batch, [...fileCodes, ...manualCodes])); processed += batch.length; render();
+      results.push(...attachFullCodes(batch, [...fileCodes, ...manualCodes]).map(row => ({...row, comment: manualComments.get(row.cis_full) || ''}))); receivedAt = new Date(); processed += batch.length; render();
     }
     $('progress').textContent = `${stopping ? 'Остановлено' : 'Завершено'}. Получено ${processed} из ${codes.length}. Ошибок по КИЗ: ${results.filter(r => r.error).length}. В таблице показаны первые 1000 строк; экспорт содержит все результаты.`;
   } catch (e) { error(e); $('progress').textContent = `Обработка прервана. Сохранено ${results.length} из ${codes.length}; доступен экспорт частичных результатов.`; }
-  finally { busy = false; controls(); await status().catch(error); }
+  finally {
+    if (results.length && receivedAt) {
+      try {
+        await archiveReady;
+        const name = await archive.write(XLSX.write(resultWorkbook(), {type: 'array', bookType: 'xlsx'}), receivedAt);
+        $('archiveStatus').textContent = `Автоматически сохранено: ${name}. Строк: ${results.length}.`;
+        diagnostic('archive.saved', {count: results.length});
+      } catch (e) {
+        $('archiveStatus').textContent = `Автоархив не сохранён: ${e.message} Результаты доступны по кнопке «Скачать Excel».`;
+        diagnostic('archive.failed', {errorKind: e.name});
+      }
+    }
+    busy = false; controls(); await status().catch(error);
+  }
 };
 $('stop').onclick = () => { stopping = true; diagnostic('query.stopped'); controls(); };
-$('export').onclick = () => {
-  diagnostic('export.xlsx', {count: results.length});
+function resultWorkbook() {
   const book = XLSX.utils.book_new();
-  const sheet = XLSX.utils.json_to_sheet(results, {header: ['cis', 'cis_full', 'gtin', 'expirationDate', 'error']});
+  const sheet = XLSX.utils.json_to_sheet(results, {header: ['cis', 'cis_full', 'gtin', 'expirationDate', 'comment', 'error']});
   results.forEach((row, i) => {
     const serial = excelExpirationDate(row.expirationDate);
     if (serial !== null) sheet[XLSX.utils.encode_cell({r: i + 1, c: 3})] = {t: 'n', v: serial, z: 'dd"."mm"."yyyy'};
   });
-  XLSX.utils.book_append_sheet(book, sheet, 'КИЗ'); XLSX.writeFile(book, 'kiz-results.xlsx');
+  sheet.E1 = {t: 's', v: 'Комментарий'};
+  XLSX.utils.book_append_sheet(book, sheet, 'КИЗ'); return book;
+}
+$('export').onclick = () => {
+  diagnostic('export.xlsx', {count: results.length});
+  XLSX.writeFile(resultWorkbook(), 'kiz-results.xlsx');
 };
 $('json').onclick = () => {
   diagnostic('export.json', {count: results.length});
@@ -184,9 +208,21 @@ $('scanForm').onsubmit = event => {
     $('scanStatus').textContent = 'Отсканирован не КИЗ: введено менее 24 символов. Код не сохранён.';
     diagnostic('scan.rejected'); input.select(); input.focus(); return;
   }
+  const comment = $('scanComment').value.trim();
+  const isDuplicate = fileCodes.includes(value) || manualCodes.has(value);
+  const previousComment = manualComments.get(value) || '';
+  if (!isDuplicate || previousComment !== comment) {
+    manualComments.set(value, comment);
+    if (comment) {
+      recentComments = [comment, ...recentComments.filter(item => item !== comment)].slice(0, 5);
+      updateCommentHistory();
+      chrome.storage.local.set({recentScanComments: recentComments}).catch(error);
+    }
+  }
   const cis = value.slice(0, 24);
-  if (fileCodes.includes(value) || manualCodes.has(value)) {
-    $('scanStatus').textContent = 'Этот КИЗ уже добавлен. Дубликат не сохранён.';
+  if (isDuplicate) {
+    if (previousComment !== comment) rebuildCodes();
+    $('scanStatus').textContent = previousComment !== comment ? 'Комментарий к КИЗ обновлён.' : 'Этот КИЗ уже добавлен. Дубликат не сохранён.';
     diagnostic('scan.duplicate');
   } else {
     manualCodes.add(value); rebuildCodes();
@@ -197,7 +233,36 @@ $('scanForm').onsubmit = event => {
 };
 $('clearScans').onclick = () => {
   if (busy || importing) return;
-  manualCodes.clear(); rebuildCodes();
+  manualCodes.clear(); manualComments.clear(); rebuildCodes();
   $('scanStatus').textContent = 'Ручной ввод очищен. КИЗ из файла сохранены.';
   diagnostic('scan.cleared'); $('scanInput').focus();
+};
+
+function updateCommentHistory() {
+  $('commentHistory').replaceChildren();
+  for (const text of recentComments) { const option = document.createElement('option'); option.value = text; $('commentHistory').append(option); }
+}
+chrome.storage.local.get('recentScanComments').then(({recentScanComments}) => {
+  recentComments = Array.isArray(recentScanComments) ? [...new Set(recentScanComments.filter(value => typeof value === 'string' && value.trim()))].slice(0, 5) : [];
+  updateCommentHistory();
+}).catch(error);
+archiveReady.then(ready => {
+  $('archiveStatus').textContent = ready ? 'Папка архива подключена. Результаты будут сохраняться автоматически.' : 'Выберите папку C:\\ExtensionKIZ\\Архив и разрешите запись для автоматического сохранения.';
+});
+$('chooseArchive').onclick = async () => {
+  try {
+    const retained = await archive.choose();
+    // A restored handle must not replace a folder just selected by the user.
+    archiveReady = Promise.resolve(true);
+    $('archiveStatus').textContent = retained ? 'Папка архива выбрана. Автоматическое сохранение включено.' : 'Автосохранение включено для текущей вкладки. После перезапуска выберите папку повторно.';
+    diagnostic('archive.configured');
+  } catch (e) { if (e.name !== 'AbortError') { $('archiveStatus').textContent = e.message; diagnostic('archive.failed', {errorKind: e.name}); } }
+};
+$('clearData').onclick = () => {
+  if (busy || importing || !confirm('Вы уверены что хотите очистить список отсканированных и загруженных КИЗ')) return;
+  manualCodes.clear(); manualComments.clear(); fileCodes = []; rows = []; workbook = undefined;
+  $('file').value = ''; $('sheet').replaceChildren(); $('column').replaceChildren();
+  $('importErrors').textContent = ''; $('fileStatus').textContent = 'Файл не выбран.';
+  $('scanInput').value = ''; $('scanComment').value = ''; $('scanStatus').textContent = '';
+  rebuildCodes(); diagnostic('data.cleared');
 };

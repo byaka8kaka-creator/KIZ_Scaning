@@ -37,17 +37,30 @@ try {
   const page = await browser.newPage({acceptDownloads: true});
   const errors = []; page.on('pageerror', e => errors.push(e.message));
   await page.exposeFunction('sendToBackground', data => message(data));
-  await page.exposeFunction('readDiagnosticLog', () => ({diagnosticLog: stores.local.diagnosticLog || []}));
+  await page.exposeFunction('readDiagnosticLog', key => ({[key]: stores.local[key]}));
+  await page.exposeFunction('storeBrowserSettings', values => storage.local.set(values));
   await page.addInitScript(() => {
-    window.chrome = {runtime: {sendMessage: data => window.sendToBackground(data), getManifest: () => ({version: '1.0.1'})}, storage: {local: {get: () => window.readDiagnosticLog()}, onChanged: {addListener() {}}}};
+    window.archiveWrites = [];
+    const files = new Set();
+    window.showDirectoryPicker = async () => ({
+      queryPermission: async () => 'granted',
+      getFileHandle: async (name, options) => {
+        if (!files.has(name) && !options?.create) throw new DOMException('missing', 'NotFoundError');
+        files.add(name);
+        return {createWritable: async () => ({write: async bytes => {window.archiveWrites.push({name, bytes: Array.from(new Uint8Array(bytes))});}, close: async () => {}, abort: async () => {}})};
+      }
+    });
+    window.chrome = {runtime: {sendMessage: data => window.sendToBackground(data), getManifest: () => ({version: '1.0.1'})}, storage: {local: {get: key => window.readDiagnosticLog(key), set: values => window.storeBrowserSettings(values)}, onChanged: {addListener() {}}}};
   });
   await page.route('https://kiz.test/**', async route => {
     const path = new URL(route.request().url()).pathname.slice(1);
-    if (!['app.html', 'app.css', 'app.js', 'core.js', 'diagnostics.js', 'vendor/xlsx.full.min.js'].includes(path)) return route.abort();
+    if (!['app.html', 'app.css', 'app.js', 'core.js', 'diagnostics.js', 'archive.js', 'vendor/xlsx.full.min.js'].includes(path)) return route.abort();
     await route.fulfill({body: await readFile(new URL('../' + (process.env.KIZ_TEST_SOURCE || 'dist') + '/' + path, import.meta.url)), contentType: path.endsWith('.js') ? 'text/javascript' : path.endsWith('.css') ? 'text/css' : 'text/html'});
   });
   await page.goto('https://kiz.test/app.html');
   await page.getByText('Требуется авторизация с электронной подписью.').waitFor();
+  await page.locator('#chooseArchive').click();
+  await page.locator('#archiveStatus').filter({hasText: 'Автосохранение включено'}).waitFor();
   await page.locator('#login').click();
   await page.getByText(/Подпишите данные в открывшейся/).waitFor();
   await page.locator('summary').click();
@@ -59,14 +72,18 @@ try {
   assert.equal((await message({type: 'begin'})).value.valid, true);
   assert.equal(calls.filter(c => c.url.endsWith('/auth/key')).length, 1);
   await page.locator('#scan').click();
+  await page.locator('#scanComment').fill('Партия А');
   await page.locator('#scanInput').fill('x'.repeat(23));
   await page.locator('#scanInput').press('Enter');
   await page.getByText('Отсканирован не КИЗ:', {exact: false}).waitFor();
+  assert.equal(await page.locator('#commentHistory option').count(), 0);
   assert.equal(await page.locator('#run').isDisabled(), true);
   const scanned = '0104650096358972215xjGAn';
   const scannedFull = scanned + '\u001d931CRy';
   await page.locator('#scanInput').fill('0104650096358972215чоПФт\u001d931СКн');
   await page.locator('#scanInput').press('Enter');
+  await page.waitForFunction(() => document.querySelectorAll('#commentHistory option').length === 1);
+  assert.equal(stores.local.recentScanComments[0], 'Партия А');
   assert.equal(await page.locator('#scanInput').inputValue(), '');
   assert.equal(await page.locator('#run').isEnabled(), true);
   await page.locator('#scanInput').fill('0104650096358972215чоПФт\u001d931СКн');
@@ -77,6 +94,14 @@ try {
   await page.getByText(/Завершено. Получено 1 из 1/).waitFor();
   assert.deepEqual(JSON.parse(calls.find(c => c.url.endsWith('/cises/info')).body), [scanned]);
   assert.equal(await page.locator('#results tr td').nth(1).textContent(), scannedFull);
+  assert.equal(await page.locator('#results tr td').nth(4).textContent(), 'Партия А');
+  await page.locator('#archiveStatus').filter({hasText: 'Автоматически сохранено'}).waitFor();
+  const archived = await page.evaluate(() => archiveWrites.at(-1));
+  assert.match(archived.name, /^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}-\d{3}\.xlsx$/);
+  const archiveBook = XLSX.read(Buffer.from(archived.bytes), {type: 'buffer', cellNF: true});
+  const archiveRows = XLSX.utils.sheet_to_json(archiveBook.Sheets['КИЗ']);
+  assert.equal(archiveRows[0]['Комментарий'], 'Партия А');
+  assert.equal(archiveRows[0].cis_full, scannedFull);
   const book = XLSX.utils.book_new();
   const code = scanned;
   XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([['КИЗ'], [code + 'tail'], [code]]), 'Коды');
@@ -114,6 +139,13 @@ try {
   assert.equal(XLSX.SSF.format(dateCell.z, dateCell.v), '05.10.2027');
   const date = XLSX.SSF.parse_date_code(dateCell.v);
   assert.deepEqual([date.y, date.m, date.d, date.H, date.M, date.S], [2027, 10, 5, 0, 0, 0]);
+  // Archive failure must preserve successful API results and allow manual export.
+  await page.evaluate(() => { window.showDirectoryPicker = async () => ({queryPermission: async () => 'denied'}); });
+  await page.locator('#chooseArchive').click();
+  await page.locator('#run').click();
+  await page.locator('#archiveStatus').filter({hasText: 'Автоархив не сохранён'}).waitFor();
+  assert.equal(await page.locator('#export').isEnabled(), true);
+  assert.equal(await page.locator('#results tr').count(), 2);
   const jsonPromise = page.waitForEvent('download');
   await page.locator('#json').click();
   const jsonDownload = await jsonPromise;
@@ -221,6 +253,28 @@ try {
   await page.waitForFunction(() => window.sendToBackground({type: 'status'}).then(r => r.value.automaticAuth.state === 'failed'));
   assert.equal(stores.local.automaticAuth.reason, 'timeout');
   assert.equal(stores.session.challenge, undefined);
+  await page.locator('#scan').click();
+  for (let i = 1; i <= 6; i++) {
+    await page.locator('#scanComment').fill(`Комментарий ${i}`);
+    await page.locator('#scanInput').fill('K'.repeat(24));
+    await page.locator('#scanInput').press('Enter');
+  }
+  assert.deepEqual(await page.locator('#commentHistory option').evaluateAll(nodes => nodes.map(node => node.value)), ['Комментарий 6', 'Комментарий 5', 'Комментарий 4', 'Комментарий 3', 'Комментарий 2']);
+  await page.locator('#closeScan').click();
+  page.once('dialog', async dialog => {
+    assert.equal(dialog.message(), 'Вы уверены что хотите очистить список отсканированных и загруженных КИЗ');
+    await dialog.dismiss();
+  });
+  await page.locator('#clearData').click();
+  assert.equal(await page.locator('#run').isEnabled(), true);
+  page.once('dialog', dialog => dialog.accept());
+  await page.locator('#clearData').click();
+  assert.equal(await page.locator('#run').isDisabled(), true);
+  assert.equal(await page.locator('#file').inputValue(), '');
+  assert.equal(await page.locator('#sheet option').count(), 0);
+  assert.equal(await page.locator('#results tr').count(), 0);
+  assert.equal(await page.locator('#scanComment').inputValue(), '');
+  assert.equal(await page.locator('#commentHistory option').count(), 5);
   const logPromise = page.waitForEvent('download');
   await page.locator('#downloadLog').click();
   const logDownload = await logPromise;
