@@ -53,6 +53,23 @@ try {
   assert.deepEqual(JSON.parse(calls[1].body), {uuid: 'uuid', data: 'A'.repeat(100)});
   assert.equal((await message({type: 'begin'})).value.valid, true);
   assert.equal(calls.filter(c => c.url.endsWith('/auth/key')).length, 1);
+  await page.locator('#scan').click();
+  await page.locator('#scanInput').fill('x'.repeat(23));
+  await page.locator('#scanInput').press('Enter');
+  await page.getByText('Отсканирован не КИЗ:', {exact: false}).waitFor();
+  assert.equal(await page.locator('#run').isDisabled(), true);
+  const scanned = '010123456789012321AbCdEf';
+  await page.locator('#scanInput').fill(scanned);
+  await page.locator('#scanInput').press('Enter');
+  assert.equal(await page.locator('#scanInput').inputValue(), '');
+  assert.equal(await page.locator('#run').isEnabled(), true);
+  await page.locator('#scanInput').fill(scanned + 'extra');
+  await page.locator('#scanInput').press('Enter');
+  await page.getByText('Этот КИЗ уже добавлен.', {exact: false}).waitFor();
+  await page.locator('#closeScan').click();
+  await page.locator('#run').click();
+  await page.getByText(/Завершено. Получено 1 из 1/).waitFor();
+  assert.deepEqual(JSON.parse(calls.find(c => c.url.endsWith('/cises/info')).body), [scanned]);
   const book = XLSX.utils.book_new();
   const code = '010123456789012321AbCdEf';
   XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([['КИЗ'], [code + 'tail'], [code]]), 'Коды');
@@ -65,6 +82,20 @@ try {
     const query = calls.find(c => c.url.endsWith('/cises/info'));
     assert.equal(query.headers.Authorization, 'Bearer test-token'); assert.deepEqual(JSON.parse(query.body), [code]);
   }
+  // Manual codes survive file replacement and deduplicate against imported codes.
+  await page.locator('#scan').click();
+  await page.locator('#scanInput').fill('Z'.repeat(25));
+  await page.locator('#scanInput').press('Enter');
+  await page.getByText('Вручную добавлено: 2. Всего уникальных КИЗ: 2.').waitFor();
+  await page.locator('#scanInput').fill('Z'.repeat(24));
+  await page.locator('#scanInput').press('Enter');
+  await page.getByText('Этот КИЗ уже добавлен.', {exact: false}).waitFor();
+  await page.locator('#clearScans').click();
+  await page.getByText('Вручную добавлено: 0. Всего уникальных КИЗ: 1.').waitFor();
+  await page.locator('#scanInput').press('Escape');
+  assert.equal(await page.locator('#scanDialog').isVisible(), false);
+  await page.locator('#run').click();
+  await page.getByText(/Завершено. Получено 1 из 1/).waitFor();
   const downloadPromise = page.waitForEvent('download'); await page.locator('#export').click();
   const download = await downloadPromise;
   const exported = XLSX.read(await readFile(await download.path()), {type: 'buffer'});
