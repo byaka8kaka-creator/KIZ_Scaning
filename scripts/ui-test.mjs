@@ -23,7 +23,7 @@ globalThis.fetch = async (url, options) => {
   if (url.endsWith('/auth/key')) return new Response(JSON.stringify({uuid: 'uuid', data: 'challenge-data'}));
   if (url.endsWith('/auth/simpleSignIn')) return new Response(JSON.stringify({token: 'test-token'}));
   if (failStatus) { const status = failStatus; failStatus = 0; return new Response('', {status}); }
-  return new Response(JSON.stringify(JSON.parse(options.body).map(cis => ({cisInfo: {cis, gtin: '01234567890123', expirationDate: '2027-10-02'}}))));
+  return new Response(JSON.stringify(JSON.parse(options.body).map(cis => ({cisInfo: {cis, gtin: '01234567890123', expirationDate: '2027-10-05T00:00:00.000Z'}}))));
 };
 await import('../extension/background.js');
 const message = (data, sender = {url: 'https://kiz.test/app.html'}) => new Promise(resolve => listener(data, sender, resolve));
@@ -78,7 +78,7 @@ try {
     await page.getByText('Уникальных КИЗ: 1. Ошибок: 0.').waitFor();
     await page.locator('#run').click();
     await page.getByText(/Завершено. Получено 1 из 1/).waitFor();
-    assert.match(await page.locator('#results').innerText(), /2027-10-02/);
+    assert.match(await page.locator('#results').innerText(), /05\.10\.2027/);
     const query = calls.find(c => c.url.endsWith('/cises/info'));
     assert.equal(query.headers.Authorization, 'Bearer test-token'); assert.deepEqual(JSON.parse(query.body), [code]);
   }
@@ -100,6 +100,16 @@ try {
   const download = await downloadPromise;
   const exported = XLSX.read(await readFile(await download.path()), {type: 'buffer'});
   assert.equal(XLSX.utils.sheet_to_json(exported.Sheets['КИЗ'])[0].cis, code);
+  const dateCell = exported.Sheets['КИЗ'].C2;
+  assert.equal(dateCell.t, 'n');
+  assert.equal(XLSX.utils.format_cell(dateCell), '05.10.2027');
+  const date = XLSX.SSF.parse_date_code(dateCell.v);
+  assert.deepEqual([date.y, date.m, date.d, date.H, date.M, date.S], [2027, 10, 5, 0, 0, 0]);
+  const jsonPromise = page.waitForEvent('download');
+  await page.locator('#json').click();
+  const jsonDownload = await jsonPromise;
+  const jsonRows = JSON.parse(await readFile(await jsonDownload.path(), 'utf8'));
+  assert.equal(jsonRows[0].expirationDate, '05.10.2027');
   failStatus = 403;
   await page.locator('#run').click(); await page.locator('#error').filter({hasText: /HTTP 403/}).waitFor();
   assert.equal(stores.local.auth.token, 'test-token');

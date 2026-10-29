@@ -60,9 +60,30 @@ export function parseResults(payload, requested) {
     if (typeof cis !== 'string') continue;
     const errorCode = item?.errorCode ?? info?.errorCode;
     byCis.set(cis, {
-      cis, gtin: info.gtin ?? '', expirationDate: info.expirationDate ?? '',
+      cis, gtin: info.gtin ?? '', expirationDate: formatExpirationDate(info.expirationDate),
       error: errorCode ? `Ошибка API: ${errorCode}` : (item?.errorMessage ?? '')
     });
   }
   return requested.map(cis => byCis.get(cis) ?? {cis, gtin: '', expirationDate: '', error: 'Нет данных в ответе API'});
+}
+
+// Keep the calendar date supplied by API; timezone conversion must not shift the day.
+export function formatExpirationDate(value) {
+  if (value === null || value === undefined || value === '') return '';
+  if (typeof value !== 'string') return String(value);
+  const match = /^(\d{4})-(\d{2})-(\d{2})(?:$|T)/.exec(value);
+  if (!match) return value;
+  const [, year, month, day] = match;
+  const date = new Date(`${year}-${month}-${day}T00:00:00.000Z`);
+  if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== `${year}-${month}-${day}`) return value;
+  return `${day}.${month}.${year}`;
+}
+export function excelExpirationDate(value) {
+  const match = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(value);
+  if (!match) return null;
+  const [, day, month, year] = match;
+  const iso = `${year}-${month}-${day}`;
+  if (+year < 1900 || formatExpirationDate(iso) !== value) return null;
+  const serial = (Date.parse(`${iso}T00:00:00Z`) - Date.UTC(1899, 11, 30)) / 86400000;
+  return serial < 61 ? serial - 1 : serial;
 }

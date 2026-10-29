@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {tokenValid, TOKEN_TTL, request, extractCodes, parseResults} from '../extension/core.js';
+import {tokenValid, TOKEN_TTL, request, extractCodes, parseResults, formatExpirationDate, excelExpirationDate} from '../extension/core.js';
 import XLSX from '@e965/xlsx';
 test('token is reused for 10 hours, expires on boundary', () => {
   const auth = {token: 'test', expiresAt: 1000 + TOKEN_TTL};
@@ -35,6 +35,20 @@ for (const bookType of ['xls', 'xlsx']) test(`${bookType}: import preserves exac
 });
 test('CIS response maps nested and flat records by cis; missing and API errors stay visible', () => {
   const parsed = parseResults([{cisInfo: {cis: 'a', gtin: '01', expirationDate: '2027-01-01'}}, {cis: 'b', errorCode: 404}], ['b', 'a', 'c']);
-  assert.match(parsed[0].error, /404/); assert.equal(parsed[1].gtin, '01'); assert.equal(parsed[1].expirationDate, '2027-01-01'); assert.match(parsed[2].error, /Нет данных/);
+  assert.match(parsed[0].error, /404/); assert.equal(parsed[1].gtin, '01'); assert.equal(parsed[1].expirationDate, '01.01.2027'); assert.match(parsed[2].error, /Нет данных/);
   assert.throws(() => parseResults({}, []), /массив/);
+});
+
+test('expiration dates omit time and timezone without shifting calendar day', () => {
+  for (const [input, expected] of [
+    ['2027-10-05T00:00:00.000Z', '05.10.2027'],
+    ['2027-10-19T23:00:00-05:00', '19.10.2027'],
+    ['2028-02-29', '29.02.2028'], ['', ''], [null, ''],
+    ['2027-02-29', '2027-02-29'], ['unknown', 'unknown']
+  ]) assert.equal(formatExpirationDate(input), expected);
+  const serial = excelExpirationDate('05.10.2027');
+  const decoded = XLSX.SSF.parse_date_code(serial);
+  assert.deepEqual([decoded.y, decoded.m, decoded.d, decoded.H, decoded.M, decoded.S], [2027, 10, 5, 0, 0, 0]);
+  assert.equal(excelExpirationDate(''), null);
+  assert.equal(excelExpirationDate('31.02.2027'), null);
 });
