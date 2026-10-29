@@ -114,7 +114,7 @@ async function handle(message, sender) {
   }
   switch (message.type) {
     case 'diagnostic': {
-      const allowed = ['archive.saved', 'archive.failed', 'archive.configured', 'data.cleared', 'scan.saved', 'scan.rejected', 'scan.duplicate', 'scan.cleared', 'ui.started', 'ui.error', 'file.imported', 'file.import_failed', 'file.library_missing', 'query.started', 'query.stopped', 'export.xlsx', 'export.json', 'ui.unhandled_error'];
+      const allowed = ['catalog.loaded', 'catalog.failed', 'archive.saved', 'archive.failed', 'archive.configured', 'data.cleared', 'scan.saved', 'scan.rejected', 'scan.duplicate', 'scan.cleared', 'ui.started', 'ui.error', 'file.imported', 'file.import_failed', 'file.library_missing', 'query.started', 'query.stopped', 'export.xlsx', 'export.json', 'ui.unhandled_error'];
       if (allowed.includes(message.event)) await record(message.event, message.details);
       return {};
     }

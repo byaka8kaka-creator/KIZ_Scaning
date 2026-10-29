@@ -1,4 +1,5 @@
 import {extractCodes, excelExpirationDate, correctKeyboardLayout, attachFullCodes} from './core.js';
+import {parseCatalog, articleFor} from './catalog.js';
 import {Archive} from './archive.js';
 const archive = new Archive();
 let archiveReady = archive.restore().catch(() => false);
@@ -7,6 +8,8 @@ let recentComments = [];
 const $ = id => document.getElementById(id);
 let workbook, rows = [], codes = [], results = [], busy = false, stopping = false, importing = false;
 let fileCodes = [];
+let catalog = new Map(), catalogLoadedAt = null;
+let catalogLoading = true;
 const manualCodes = new Set();
 const send = async message => {
   const reply = await chrome.runtime.sendMessage(message);
@@ -19,14 +22,15 @@ window.addEventListener('unhandledrejection', () => diagnostic('ui.unhandled_err
 function error(e) { diagnostic('ui.error', {errorKind: e?.name || 'Error'}); $('error').textContent = e?.message || String(e); }
 function excelAvailable() { return typeof globalThis.XLSX?.read === 'function'; }
 function controls() {
-  $('run').disabled = busy || importing || !codes.length;
-  for (const id of ['file', 'header']) $(id).disabled = busy || importing || !excelAvailable();
-  for (const id of ['sheet', 'column']) $(id).disabled = busy || importing || !workbook;
-  for (const id of ['export', 'json']) $(id).disabled = !results.length;
-  $('scan').disabled = busy || importing;
-  $('clearData').disabled = busy || importing;
-  $('chooseArchive').disabled = busy || importing;
-  $('export').disabled = !results.length || !excelAvailable();
+  $('run').disabled = busy || importing || catalogLoading || !codes.length;
+  for (const id of ['file', 'header']) $(id).disabled = busy || importing || catalogLoading || !excelAvailable();
+  for (const id of ['sheet', 'column']) $(id).disabled = busy || importing || catalogLoading || !workbook;
+  for (const id of ['export', 'json']) $(id).disabled = !results.length || catalogLoading;
+  $('loadCatalog').disabled = busy || importing || catalogLoading || !excelAvailable();
+  $('scan').disabled = busy || importing || catalogLoading;
+  $('clearData').disabled = busy || importing || catalogLoading;
+  $('chooseArchive').disabled = busy || importing || catalogLoading;
+  $('export').disabled = !results.length || catalogLoading || !excelAvailable();
   $('stop').disabled = !busy || stopping;
 }
 async function status() {
@@ -109,7 +113,7 @@ function render() {
   // Keep the view responsive; export always contains all rows.
   for (const row of results.slice(0, 1000)) {
     const tr = document.createElement('tr');
-    for (const key of ['cis', 'cis_full', 'gtin', 'expirationDate', 'comment', 'error']) { const td = document.createElement('td'); td.textContent = row[key] ?? ''; tr.append(td); }
+    for (const key of ['cis', 'cis_full', 'gtin', 'expirationDate', 'comment', 'article', 'error']) { const td = document.createElement('td'); td.textContent = row[key] ?? ''; tr.append(td); }
     $('results').append(tr);
   }
   controls();
@@ -123,7 +127,7 @@ $('run').onclick = async () => {
     for (let i = 0; i < codes.length && !stopping; i += 100) {
       $('progress').textContent = `Запрос: ${i + 1}–${Math.min(i + 100, codes.length)} из ${codes.length}…`;
       const batch = await send({type: 'query', codes: codes.slice(i, i + 100)});
-      results.push(...attachFullCodes(batch, [...fileCodes, ...manualCodes]).map(row => ({...row, comment: manualComments.get(row.cis_full) || ''}))); receivedAt = new Date(); processed += batch.length; render();
+      results.push(...attachFullCodes(batch, [...fileCodes, ...manualCodes]).map(row => ({...row, comment: manualComments.get(row.cis_full) || '', article: articleFor(row.gtin, catalog)}))); receivedAt = new Date(); processed += batch.length; render();
     }
     $('progress').textContent = `${stopping ? 'Остановлено' : 'Завершено'}. Получено ${processed} из ${codes.length}. Ошибок по КИЗ: ${results.filter(r => r.error).length}. В таблице показаны первые 1000 строк; экспорт содержит все результаты.`;
   } catch (e) { error(e); $('progress').textContent = `Обработка прервана. Сохранено ${results.length} из ${codes.length}; доступен экспорт частичных результатов.`; }
@@ -145,12 +149,13 @@ $('run').onclick = async () => {
 $('stop').onclick = () => { stopping = true; diagnostic('query.stopped'); controls(); };
 function resultWorkbook() {
   const book = XLSX.utils.book_new();
-  const sheet = XLSX.utils.json_to_sheet(results, {header: ['cis', 'cis_full', 'gtin', 'expirationDate', 'comment', 'error']});
+  const sheet = XLSX.utils.json_to_sheet(results, {header: ['cis', 'cis_full', 'gtin', 'expirationDate', 'comment', 'article', 'error']});
   results.forEach((row, i) => {
     const serial = excelExpirationDate(row.expirationDate);
     if (serial !== null) sheet[XLSX.utils.encode_cell({r: i + 1, c: 3})] = {t: 'n', v: serial, z: 'dd"."mm"."yyyy'};
   });
   sheet.D1 = {t: 's', v: 'Срок годности'};
+  sheet.F1 = {t: 's', v: 'Артикул'};
   sheet.E1 = {t: 's', v: 'Комментарий'};
   XLSX.utils.book_append_sheet(book, sheet, 'КИЗ'); return book;
 }
@@ -160,7 +165,7 @@ $('export').onclick = () => {
 };
 $('json').onclick = () => {
   diagnostic('export.json', {count: results.length});
-  const url = URL.createObjectURL(new Blob([JSON.stringify(results.map(({expirationDate, ...row}) => ({...row, 'Срок годности': expirationDate})), null, 2)], {type: 'application/json'}));
+  const url = URL.createObjectURL(new Blob([JSON.stringify(results.map(({expirationDate, article, ...row}) => ({...row, 'Срок годности': expirationDate, 'Артикул': article})), null, 2)], {type: 'application/json'}));
   const a = document.createElement('a'); a.href = url; a.download = 'kiz-results.json'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 status().catch(error);
@@ -266,4 +271,45 @@ $('clearData').onclick = () => {
   $('importErrors').textContent = ''; $('fileStatus').textContent = 'Файл не выбран.';
   $('scanInput').value = ''; $('scanComment').value = ''; $('scanStatus').textContent = '';
   rebuildCodes(); diagnostic('data.cleared');
+};
+
+function catalogStatus() {
+  $('catalogStatus').textContent = catalogLoadedAt
+    ? `Записей: ${catalog.size}. Дата загрузки: ${new Date(catalogLoadedAt).toLocaleString('ru-RU')}.`
+    : 'Справочник не загружен.';
+}
+chrome.storage.local.get('articleCatalog').then(({articleCatalog}) => {
+  if (articleCatalog && Array.isArray(articleCatalog.entries)) {
+    catalog = new Map(articleCatalog.entries); catalogLoadedAt = articleCatalog.loadedAt;
+  }
+  catalogStatus();
+}).catch(e => { $('catalogErrors').textContent = 'Не удалось восстановить справочник. Загрузите файл повторно.'; diagnostic('catalog.failed', {errorKind: e.name}); })
+  .finally(() => { catalogLoading = false; controls(); });
+$('loadCatalog').onclick = () => $('catalogFile').click();
+$('catalogFile').onchange = async () => {
+  const file = $('catalogFile').files[0];
+  if (!file || busy || importing || catalogLoading) return;
+  catalogLoading = true; controls(); $('catalogErrors').textContent = '';
+  try {
+    if (!/\.(xlsx|xls)$/i.test(file.name) || file.size > 20 * 1024 * 1024) throw new Error('Выберите .xls/.xlsx размером до 20 МБ.');
+    const book = XLSX.read(await file.arrayBuffer(), {type: 'array'});
+    if (!book.SheetNames.length) throw new Error('В книге нет листов.');
+    const entries = parseCatalog(XLSX.utils.sheet_to_json(book.Sheets[book.SheetNames[0]], {header: 1, raw: true, defval: '', blankrows: true, range: 0}));
+    const loadedAt = new Date().toISOString();
+    // Commit only after validation and successful persistence. Invalid uploads preserve the previous catalog.
+    await chrome.storage.local.set({articleCatalog: {entries, loadedAt}});
+    catalog = new Map(entries); catalogLoadedAt = loadedAt; catalogStatus();
+    results = results.map(row => ({...row, article: articleFor(row.gtin, catalog)})); render();
+    diagnostic('catalog.loaded', {count: catalog.size});
+    if (results.length) {
+      try {
+        await archiveReady;
+        const name = await archive.write(XLSX.write(resultWorkbook(), {type: 'array', bookType: 'xlsx'}), new Date());
+        $('archiveStatus').textContent = `Результаты с обновлёнными артикулами сохранены: ${name}.`;
+      } catch (e) { $('archiveStatus').textContent = `Артикулы пересчитаны. Автоархив не сохранён: ${e.message} Используйте «Скачать Excel».`; }
+    }
+  } catch (e) {
+    $('catalogErrors').textContent = `Справочник не обновлён. Предыдущие данные сохранены.\n${e.message}`;
+    diagnostic('catalog.failed', {errorKind: e.name});
+  } finally { catalogLoading = false; $('catalogFile').value = ''; controls(); }
 };

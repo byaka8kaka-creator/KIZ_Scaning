@@ -54,7 +54,7 @@ try {
   });
   await page.route('https://kiz.test/**', async route => {
     const path = new URL(route.request().url()).pathname.slice(1);
-    if (!['app.html', 'app.css', 'app.js', 'core.js', 'diagnostics.js', 'archive.js', 'vendor/xlsx.full.min.js'].includes(path)) return route.abort();
+    if (!['app.html', 'app.css', 'app.js', 'core.js', 'diagnostics.js', 'archive.js', 'catalog.js', 'vendor/xlsx.full.min.js'].includes(path)) return route.abort();
     await route.fulfill({body: await readFile(new URL('../' + (process.env.KIZ_TEST_SOURCE || 'dist') + '/' + path, import.meta.url)), contentType: path.endsWith('.js') ? 'text/javascript' : path.endsWith('.css') ? 'text/css' : 'text/html'});
   });
   await page.goto('https://kiz.test/app.html');
@@ -102,6 +102,30 @@ try {
   const archiveRows = XLSX.utils.sheet_to_json(archiveBook.Sheets['КИЗ']);
   assert.equal(archiveRows[0]['Комментарий'], 'Партия А');
   assert.equal(archiveRows[0].cis_full, scannedFull);
+  assert.equal(await page.locator('#results tr td').nth(5).textContent(), 'Не найден в справочнике');
+  const apiCallsBeforeCatalog = calls.length;
+  async function uploadCatalog(rows, bookType = 'xlsx') {
+    const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet(rows), 'Справочник');
+    await page.locator('#catalogFile').setInputFiles({name: `catalog.${bookType}`, mimeType: 'application/octet-stream', buffer: XLSX.write(book, {type: 'buffer', bookType})});
+  }
+  await uploadCatalog([['GTIN', 'Артикул'], ['01234567890123', '000A'], ['01234567890124', '000A']], 'xls');
+  await page.locator('#catalogStatus').filter({hasText: 'Записей: 2.'}).waitFor();
+  await page.locator('#archiveStatus').filter({hasText: 'обновлёнными артикулами сохранены'}).waitFor();
+  assert.equal(await page.locator('#results tr td').nth(5).textContent(), '000A');
+  assert.equal(calls.length, apiCallsBeforeCatalog);
+  const catalogArchive = await page.evaluate(() => archiveWrites.at(-1));
+  const archivedArticles = XLSX.read(Buffer.from(catalogArchive.bytes), {type: 'buffer'});
+  assert.equal(XLSX.utils.sheet_to_json(archivedArticles.Sheets['КИЗ'])[0]['Артикул'], '000A');
+  const previousCatalog = JSON.stringify(stores.local.articleCatalog);
+  await uploadCatalog([['GTIN', 'Артикул'], ['01234567890123', 'wrong'], ['01234567890123', 'other']]);
+  await page.locator('#catalogErrors').filter({hasText: 'строки 2 и 3'}).waitFor();
+  assert.equal(JSON.stringify(stores.local.articleCatalog), previousCatalog);
+  assert.equal(await page.locator('#results tr td').nth(5).textContent(), '000A');
+  await uploadCatalog([['GTIN', 'Артикул'], ['01234567890123', '000B'], ['01234567890124', '000B']]);
+  await page.locator('#results tr td').nth(5).filter({hasText: '000B'}).waitFor();
+  await page.locator('#loadCatalog').waitFor({state: 'visible'});
+  assert.equal(calls.length, apiCallsBeforeCatalog);
   const book = XLSX.utils.book_new();
   const code = scanned;
   XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([['КИЗ'], [code + 'tail'], [code]]), 'Коды');
@@ -134,6 +158,7 @@ try {
   assert.equal(XLSX.utils.sheet_to_json(exported.Sheets['КИЗ'])[0].cis, code);
   assert.equal(await page.locator('th').nth(3).textContent(), 'Срок годности');
   assert.equal(exported.Sheets['КИЗ'].D1.v, 'Срок годности');
+  assert.equal(XLSX.utils.sheet_to_json(exported.Sheets['КИЗ'])[0]['Артикул'], '000B');
   assert.equal(archiveBook.Sheets['КИЗ'].D1.v, 'Срок годности');
   const dateCell = exported.Sheets['КИЗ'].D2;
   assert.equal(XLSX.utils.sheet_to_json(exported.Sheets['КИЗ'])[0].cis_full, code + 'tail');
@@ -157,6 +182,8 @@ try {
   assert.equal('expirationDate' in jsonRows[0], false);
   assert.equal(jsonRows[0].cis_full, code + 'tail');
   assert.equal(jsonRows.length, 2);
+  assert.equal(jsonRows[0]['Артикул'], '000B');
+  assert.equal('article' in jsonRows[0], false);
   failStatus = 403;
   await page.locator('#run').click(); await page.locator('#error').filter({hasText: /HTTP 403/}).waitFor();
   assert.equal(stores.local.auth.token, 'test-token');
@@ -295,6 +322,8 @@ try {
   assert.deepEqual(errors, []);
   await page.route('https://kiz.test/vendor/xlsx.full.min.js', route => route.abort());
   await page.reload();
+  await page.locator('#catalogStatus').filter({hasText: 'Записей: 2.'}).waitFor();
+  assert.equal(stores.local.articleCatalog.entries[0][1], '000B');
   await page.locator('#error').filter({hasText: 'Библиотека Excel не загружена'}).waitFor();
   assert.equal(await page.locator('#file').isDisabled(), true);
   assert.equal(await page.locator('#run').isDisabled(), true);
