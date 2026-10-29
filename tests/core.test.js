@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {tokenValid, TOKEN_TTL, request, extractCodes, parseResults, formatExpirationDate, excelExpirationDate} from '../extension/core.js';
+import {tokenValid, TOKEN_TTL, request, extractCodes, parseResults, formatExpirationDate, excelExpirationDate, correctKeyboardLayout, attachFullCodes} from '../extension/core.js';
 import XLSX from '@e965/xlsx';
 test('token is reused for 10 hours, expires on boundary', () => {
   const auth = {token: 'test', expiresAt: 1000 + TOKEN_TTL};
@@ -51,4 +51,18 @@ test('expiration dates omit time and timezone without shifting calendar day', ()
   assert.deepEqual([decoded.y, decoded.m, decoded.d, decoded.H, decoded.M, decoded.S], [2027, 10, 5, 0, 0, 0]);
   assert.equal(excelExpirationDate(''), null);
   assert.equal(excelExpirationDate('31.02.2027'), null);
+});
+
+test('Russian scanner layout preserves case, full payload and GS; API receives 24 chars', () => {
+  const raw = '0104650096358972215чоПФт\u001d931СКн';
+  const full = '0104650096358972215xjGAn\u001d931CRy';
+  assert.equal(correctKeyboardLayout(raw), full);
+  assert.equal(correctKeyboardLayout(full), full);
+  assert.equal(correctKeyboardLayout('ёЁхХъЪжЖэЭбБюЮ'), "`~[{]};:'\",<.>");
+  const imported = extractCodes([[raw], [full], [full + 'extra']], 0, false);
+  assert.deepEqual(imported.codes, [full.slice(0, 24)]);
+  assert.deepEqual(imported.fullCodes, [full, full + 'extra']);
+  const rows = attachFullCodes([{cis: imported.codes[0], gtin: '01'}], imported.fullCodes);
+  assert.deepEqual(rows.map(r => r.cis_full), imported.fullCodes);
+  assert.equal(rows.length, 2);
 });

@@ -1,4 +1,4 @@
-import {extractCodes, excelExpirationDate} from './core.js';
+import {extractCodes, excelExpirationDate, correctKeyboardLayout, attachFullCodes} from './core.js';
 const $ = id => document.getElementById(id);
 let workbook, rows = [], codes = [], results = [], busy = false, stopping = false, importing = false;
 let fileCodes = [];
@@ -64,7 +64,7 @@ function importCodes() {
   if (!workbook || !excelAvailable()) return;
   const parsed = extractCodes(rows, Number($('column').value), $('header').checked);
   diagnostic('file.imported', {count: parsed.codes.length, rowCount: rows.length, columnCount: $('column').options.length, sheetCount: workbook.SheetNames.length, errorCount: parsed.errors.length, columnIndex: $('column').selectedIndex, hasHeader: $('header').checked});
-  fileCodes = parsed.codes; rebuildCodes();
+  fileCodes = parsed.fullCodes; rebuildCodes();
   $('fileStatus').textContent = `Уникальных КИЗ: ${codes.length}. Ошибок: ${parsed.errors.length}.`;
   $('importErrors').textContent = parsed.errors.slice(0, 100).join('\n') + (parsed.errors.length > 100 ? '\nПоказаны первые 100 ошибок.' : '');
   $('progress').textContent = codes.length ? 'Готово к запросу.' : 'Нет КИЗ для запроса. Выберите лист и столбец с кодами, проверьте флажок заголовка и ошибки импорта.'; controls();
@@ -93,7 +93,7 @@ function render() {
   // Keep the view responsive; export always contains all rows.
   for (const row of results.slice(0, 1000)) {
     const tr = document.createElement('tr');
-    for (const key of ['cis', 'gtin', 'expirationDate', 'error']) { const td = document.createElement('td'); td.textContent = row[key] ?? ''; tr.append(td); }
+    for (const key of ['cis', 'cis_full', 'gtin', 'expirationDate', 'error']) { const td = document.createElement('td'); td.textContent = row[key] ?? ''; tr.append(td); }
     $('results').append(tr);
   }
   controls();
@@ -101,14 +101,15 @@ function render() {
 $('run').onclick = async () => {
   diagnostic('query.started', {count: codes.length});
   busy = true; stopping = false; results = []; $('error').textContent = ''; controls();
+  let processed = 0;
   try {
     if (!(await send({type: 'status'})).valid) throw new Error('Сначала авторизуйтесь через КриптоПро.');
     for (let i = 0; i < codes.length && !stopping; i += 100) {
       $('progress').textContent = `Запрос: ${i + 1}–${Math.min(i + 100, codes.length)} из ${codes.length}…`;
       const batch = await send({type: 'query', codes: codes.slice(i, i + 100)});
-      results.push(...batch); render();
+      results.push(...attachFullCodes(batch, [...fileCodes, ...manualCodes])); processed += batch.length; render();
     }
-    $('progress').textContent = `${stopping ? 'Остановлено' : 'Завершено'}. Получено ${results.length} из ${codes.length}. Ошибок по КИЗ: ${results.filter(r => r.error).length}. В таблице показаны первые 1000 строк; экспорт содержит все результаты.`;
+    $('progress').textContent = `${stopping ? 'Остановлено' : 'Завершено'}. Получено ${processed} из ${codes.length}. Ошибок по КИЗ: ${results.filter(r => r.error).length}. В таблице показаны первые 1000 строк; экспорт содержит все результаты.`;
   } catch (e) { error(e); $('progress').textContent = `Обработка прервана. Сохранено ${results.length} из ${codes.length}; доступен экспорт частичных результатов.`; }
   finally { busy = false; controls(); await status().catch(error); }
 };
@@ -116,10 +117,10 @@ $('stop').onclick = () => { stopping = true; diagnostic('query.stopped'); contro
 $('export').onclick = () => {
   diagnostic('export.xlsx', {count: results.length});
   const book = XLSX.utils.book_new();
-  const sheet = XLSX.utils.json_to_sheet(results, {header: ['cis', 'gtin', 'expirationDate', 'error']});
+  const sheet = XLSX.utils.json_to_sheet(results, {header: ['cis', 'cis_full', 'gtin', 'expirationDate', 'error']});
   results.forEach((row, i) => {
     const serial = excelExpirationDate(row.expirationDate);
-    if (serial !== null) sheet[XLSX.utils.encode_cell({r: i + 1, c: 2})] = {t: 'n', v: serial, z: 'dd"."mm"."yyyy'};
+    if (serial !== null) sheet[XLSX.utils.encode_cell({r: i + 1, c: 3})] = {t: 'n', v: serial, z: 'dd"."mm"."yyyy'};
   });
   XLSX.utils.book_append_sheet(book, sheet, 'КИЗ'); XLSX.writeFile(book, 'kiz-results.xlsx');
 };
@@ -155,7 +156,7 @@ if (!excelAvailable()) {
 controls();
 
 function rebuildCodes() {
-  codes = [...new Set([...fileCodes, ...manualCodes])];
+  codes = [...new Set([...fileCodes, ...manualCodes].map(full => full.slice(0, 24)))];
   results = []; render();
   $('manualStatus').textContent = `Вручную добавлено: ${manualCodes.size}. Всего уникальных КИЗ: ${codes.length}.`;
   $('progress').textContent = codes.length ? 'Готово к запросу.' : 'Нет КИЗ для запроса.';
@@ -169,17 +170,17 @@ $('scanForm').onsubmit = event => {
   event.preventDefault();
   if (busy || importing) return;
   const input = $('scanInput');
-  const value = input.value.trim();
+  const value = correctKeyboardLayout(input.value.trim());
   if (value.length < 24) {
     $('scanStatus').textContent = 'Отсканирован не КИЗ: введено менее 24 символов. Код не сохранён.';
     diagnostic('scan.rejected'); input.select(); input.focus(); return;
   }
   const cis = value.slice(0, 24);
-  if (codes.includes(cis)) {
+  if (fileCodes.includes(value) || manualCodes.has(value)) {
     $('scanStatus').textContent = 'Этот КИЗ уже добавлен. Дубликат не сохранён.';
     diagnostic('scan.duplicate');
   } else {
-    manualCodes.add(cis); rebuildCodes();
+    manualCodes.add(value); rebuildCodes();
     $('scanStatus').textContent = `КИЗ сохранён. Вручную добавлено: ${manualCodes.size}. Можно сканировать следующий.`;
     diagnostic('scan.saved', {count: manualCodes.size});
   }

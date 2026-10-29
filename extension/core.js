@@ -34,8 +34,28 @@ export async function request(path, {body, token, fetchImpl = fetch} = {}) {
   try { return await response.json(); }
   catch { throw new Error('API вернул некорректный JSON.'); }
 }
+// Physical Russian keyboard keys -> Latin keys. Non-Russian characters, including GS, stay intact.
+const ruKeys = 'ё1234567890-йцукенгшщзхъфывапролджэячсмитьбю';
+const enKeys = "`1234567890-qwertyuiop[]asdfghjkl;'zxcvbnm,.";
+export function correctKeyboardLayout(value) {
+  return value.replace(/[ёа-яЁА-Я]/g, char => {
+    const index = ruKeys.indexOf(char.toLowerCase());
+    const replacement = enKeys[index];
+    const shifted = {'Ё': '~', 'Х': '{', 'Ъ': '}', 'Ж': ':', 'Э': '"', 'Б': '<', 'Ю': '>'};
+    return shifted[char] ?? (char === char.toUpperCase() ? replacement.toUpperCase() : replacement);
+  });
+}
+export function attachFullCodes(records, fullCodes) {
+  const fullByCis = new Map();
+  for (const full of new Set(fullCodes)) {
+    const cis = full.slice(0, 24);
+    if (!fullByCis.has(cis)) fullByCis.set(cis, []);
+    fullByCis.get(cis).push(full);
+  }
+  return records.flatMap(row => (fullByCis.get(row.cis) || [row.cis]).map(cis_full => ({...row, cis_full})));
+}
 export function extractCodes(rows, column, hasHeader) {
-  const codes = [], errors = [], seen = new Set();
+  const codes = [], fullCodes = new Set(), errors = [], seen = new Set();
   rows.slice(hasHeader ? 1 : 0).forEach((row, i) => {
     const value = row[column];
     if (value === undefined || value === null || value === '') return;
@@ -43,13 +63,14 @@ export function extractCodes(rows, column, hasHeader) {
     if (typeof value !== 'string') {
       errors.push(`Строка ${line}: КИЗ должен быть текстом; числовая ячейка может потерять нули и точность.`); return;
     }
-    const text = value.trim();
+    const text = correctKeyboardLayout(value.trim());
     if (!text) return;
     if (text.length < 24) { errors.push(`Строка ${line}: меньше 24 символов.`); return; }
+    fullCodes.add(text);
     const cis = text.slice(0, 24);
     if (!seen.has(cis)) { seen.add(cis); codes.push(cis); }
   });
-  return {codes, errors};
+  return {codes, fullCodes: [...fullCodes], errors};
 }
 export function parseResults(payload, requested) {
   if (!Array.isArray(payload)) throw new Error('Неожиданный формат ответа cises/info: ожидался массив.');

@@ -58,20 +58,22 @@ try {
   await page.locator('#scanInput').press('Enter');
   await page.getByText('Отсканирован не КИЗ:', {exact: false}).waitFor();
   assert.equal(await page.locator('#run').isDisabled(), true);
-  const scanned = '010123456789012321AbCdEf';
-  await page.locator('#scanInput').fill(scanned);
+  const scanned = '0104650096358972215xjGAn';
+  const scannedFull = scanned + '\u001d931CRy';
+  await page.locator('#scanInput').fill('0104650096358972215чоПФт\u001d931СКн');
   await page.locator('#scanInput').press('Enter');
   assert.equal(await page.locator('#scanInput').inputValue(), '');
   assert.equal(await page.locator('#run').isEnabled(), true);
-  await page.locator('#scanInput').fill(scanned + 'extra');
+  await page.locator('#scanInput').fill('0104650096358972215чоПФт\u001d931СКн');
   await page.locator('#scanInput').press('Enter');
   await page.getByText('Этот КИЗ уже добавлен.', {exact: false}).waitFor();
   await page.locator('#closeScan').click();
   await page.locator('#run').click();
   await page.getByText(/Завершено. Получено 1 из 1/).waitFor();
   assert.deepEqual(JSON.parse(calls.find(c => c.url.endsWith('/cises/info')).body), [scanned]);
+  assert.equal(await page.locator('#results tr td').nth(1).textContent(), scannedFull);
   const book = XLSX.utils.book_new();
-  const code = '010123456789012321AbCdEf';
+  const code = scanned;
   XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet([['КИЗ'], [code + 'tail'], [code]]), 'Коды');
   for (const bookType of ['xls', 'xlsx']) {
     await page.locator('#file').setInputFiles({name: `codes.${bookType}`, mimeType: 'application/octet-stream', buffer: XLSX.write(book, {type: 'buffer', bookType})});
@@ -87,7 +89,7 @@ try {
   await page.locator('#scanInput').fill('Z'.repeat(25));
   await page.locator('#scanInput').press('Enter');
   await page.getByText('Вручную добавлено: 2. Всего уникальных КИЗ: 2.').waitFor();
-  await page.locator('#scanInput').fill('Z'.repeat(24));
+  await page.locator('#scanInput').fill('Z'.repeat(25));
   await page.locator('#scanInput').press('Enter');
   await page.getByText('Этот КИЗ уже добавлен.', {exact: false}).waitFor();
   await page.locator('#clearScans').click();
@@ -100,7 +102,8 @@ try {
   const download = await downloadPromise;
   const exported = XLSX.read(await readFile(await download.path()), {type: 'buffer', cellNF: true});
   assert.equal(XLSX.utils.sheet_to_json(exported.Sheets['КИЗ'])[0].cis, code);
-  const dateCell = exported.Sheets['КИЗ'].C2;
+  const dateCell = exported.Sheets['КИЗ'].D2;
+  assert.equal(XLSX.utils.sheet_to_json(exported.Sheets['КИЗ'])[0].cis_full, code + 'tail');
   assert.equal(dateCell.t, 'n');
   assert.equal(dateCell.z, 'dd"."mm"."yyyy');
   assert.equal(XLSX.SSF.format(dateCell.z, dateCell.v), '05.10.2027');
@@ -111,6 +114,8 @@ try {
   const jsonDownload = await jsonPromise;
   const jsonRows = JSON.parse(await readFile(await jsonDownload.path(), 'utf8'));
   assert.equal(jsonRows[0].expirationDate, '05.10.2027');
+  assert.equal(jsonRows[0].cis_full, code + 'tail');
+  assert.equal(jsonRows.length, 2);
   failStatus = 403;
   await page.locator('#run').click(); await page.locator('#error').filter({hasText: /HTTP 403/}).waitFor();
   assert.equal(stores.local.auth.token, 'test-token');
