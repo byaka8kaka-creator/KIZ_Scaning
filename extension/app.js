@@ -119,7 +119,7 @@ $('export').onclick = () => {
   const sheet = XLSX.utils.json_to_sheet(results, {header: ['cis', 'gtin', 'expirationDate', 'error']});
   results.forEach((row, i) => {
     const serial = excelExpirationDate(row.expirationDate);
-    if (serial !== null) sheet[XLSX.utils.encode_cell({r: i + 1, c: 2})] = {t: 'n', v: serial, z: 'dd.mm.yyyy'};
+    if (serial !== null) sheet[XLSX.utils.encode_cell({r: i + 1, c: 2})] = {t: 'n', v: serial, z: 'dd"."mm"."yyyy'};
   });
   XLSX.utils.book_append_sheet(book, sheet, 'КИЗ'); XLSX.writeFile(book, 'kiz-results.xlsx');
 };

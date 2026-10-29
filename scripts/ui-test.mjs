@@ -98,11 +98,12 @@ try {
   await page.getByText(/Завершено. Получено 1 из 1/).waitFor();
   const downloadPromise = page.waitForEvent('download'); await page.locator('#export').click();
   const download = await downloadPromise;
-  const exported = XLSX.read(await readFile(await download.path()), {type: 'buffer'});
+  const exported = XLSX.read(await readFile(await download.path()), {type: 'buffer', cellNF: true});
   assert.equal(XLSX.utils.sheet_to_json(exported.Sheets['КИЗ'])[0].cis, code);
   const dateCell = exported.Sheets['КИЗ'].C2;
   assert.equal(dateCell.t, 'n');
-  assert.equal(XLSX.utils.format_cell(dateCell), '05.10.2027');
+  assert.equal(dateCell.z, 'dd"."mm"."yyyy');
+  assert.equal(XLSX.SSF.format(dateCell.z, dateCell.v), '05.10.2027');
   const date = XLSX.SSF.parse_date_code(dateCell.v);
   assert.deepEqual([date.y, date.m, date.d, date.H, date.M, date.S], [2027, 10, 5, 0, 0, 0]);
   const jsonPromise = page.waitForEvent('download');
