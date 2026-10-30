@@ -77,3 +77,8 @@ test('Russian Shift+7 maps question mark to ampersand without corrupting Latin s
   assert.deepEqual(parsed.fullCodes, [expected]);
   assert.deepEqual(parsed.codes, [expected.slice(0, 24)]);
 });
+
+test('API product status supports nested, flat and absent values', () => {
+  const rows = parseResults([{cisInfo: {cis: 'a', status: 'INTRODUCED'}}, {cis: 'b', status: 'RETIRED'}, {cisInfo: {cis: 'c'}}], ['a', 'b', 'c', 'd']);
+  assert.deepEqual(rows.map(row => row.status), ['INTRODUCED', 'RETIRED', '', '']);
+});

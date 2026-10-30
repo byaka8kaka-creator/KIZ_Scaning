@@ -83,11 +83,11 @@ export function parseResults(payload, requested) {
     if (typeof cis !== 'string') continue;
     const errorCode = item?.errorCode ?? info?.errorCode;
     byCis.set(cis, {
-      cis, gtin: info.gtin ?? '', expirationDate: formatExpirationDate(info.expirationDate),
+      cis, status: info?.status ?? item?.status ?? '', gtin: info.gtin ?? '', expirationDate: formatExpirationDate(info.expirationDate),
       error: errorCode ? `Ошибка API: ${errorCode}` : (item?.errorMessage ?? '')
     });
   }
-  return requested.map(cis => byCis.get(cis) ?? {cis, gtin: '', expirationDate: '', error: 'Нет данных в ответе API'});
+  return requested.map(cis => byCis.get(cis) ?? {cis, status: '', gtin: '', expirationDate: '', error: 'Нет данных в ответе API'});
 }
 
 // Keep the calendar date supplied by API; timezone conversion must not shift the day.

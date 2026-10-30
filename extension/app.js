@@ -1,4 +1,4 @@
-import {extractCodes, excelExpirationDate, correctKeyboardLayout, attachFullCodes} from './core.js';
+import {extractCodes, excelExpirationDate, correctKeyboardLayout, attachFullCodes, formatExpirationDate} from './core.js';
 import {parseCatalog, articleFor} from './catalog.js';
 import {Archive} from './archive.js';
 const archive = new Archive();
@@ -11,6 +11,8 @@ let fileCodes = [];
 let catalog = new Map(), catalogLoadedAt = null;
 let catalogLoading = true;
 const manualCodes = new Set();
+const barcodeRows = [];
+let barcodeArchiveQueue = Promise.resolve();
 const send = async message => {
   const reply = await chrome.runtime.sendMessage(message);
   if (!reply?.ok) throw new Error(reply?.error || 'Нет ответа от расширения.');
@@ -28,6 +30,7 @@ function controls() {
   for (const id of ['export', 'json']) $(id).disabled = !results.length || catalogLoading;
   $('loadCatalog').disabled = busy || importing || catalogLoading || !excelAvailable();
   $('scan').disabled = busy || importing || catalogLoading;
+  $('scanBarcode').disabled = busy || importing || catalogLoading;
   $('clearData').disabled = busy || importing || catalogLoading;
   $('chooseArchive').disabled = busy || importing || catalogLoading;
   $('export').disabled = !results.length || catalogLoading || !excelAvailable();
@@ -113,17 +116,17 @@ function render() {
   // Keep the view responsive; export always contains all rows.
   for (const row of results.slice(0, 1000)) {
     const tr = document.createElement('tr');
-    for (const key of ['cis', 'cis_full', 'gtin', 'expirationDate', 'comment', 'article', 'error']) { const td = document.createElement('td'); td.textContent = row[key] ?? ''; tr.append(td); }
+    for (const key of ['cis', 'cis_full', 'gtin', 'expirationDate', 'comment', 'article', 'status', 'error']) { const td = document.createElement('td'); td.textContent = row[key] ?? ''; tr.append(td); }
     $('results').append(tr);
   }
   controls();
 }
 $('run').onclick = async () => {
   diagnostic('query.started', {count: codes.length});
-  busy = true; stopping = false; results = []; $('error').textContent = ''; controls();
-  let processed = 0, receivedAt;
+  busy = true; stopping = false; results = barcodeResults(); $('error').textContent = ''; controls();
+  let processed = 0, receivedAt = results.length ? new Date() : null;
   try {
-    if (!(await send({type: 'status'})).valid) throw new Error('Сначала авторизуйтесь через КриптоПро.');
+    if (codes.length && !(await send({type: 'status'})).valid) throw new Error('Сначала авторизуйтесь через КриптоПро.');
     for (let i = 0; i < codes.length && !stopping; i += 100) {
       $('progress').textContent = `Запрос: ${i + 1}–${Math.min(i + 100, codes.length)} из ${codes.length}…`;
       const batch = await send({type: 'query', codes: codes.slice(i, i + 100)});
@@ -149,7 +152,7 @@ $('run').onclick = async () => {
 $('stop').onclick = () => { stopping = true; diagnostic('query.stopped'); controls(); };
 function resultWorkbook() {
   const book = XLSX.utils.book_new();
-  const sheet = XLSX.utils.json_to_sheet(results, {header: ['cis', 'cis_full', 'gtin', 'expirationDate', 'comment', 'article', 'error']});
+  const sheet = XLSX.utils.json_to_sheet(results, {header: ['cis', 'cis_full', 'gtin', 'expirationDate', 'comment', 'article', 'status', 'error']});
   results.forEach((row, i) => {
     const serial = excelExpirationDate(row.expirationDate);
     if (serial !== null) sheet[XLSX.utils.encode_cell({r: i + 1, c: 3})] = {t: 'n', v: serial, z: 'dd"."mm"."yyyy'};
@@ -157,6 +160,7 @@ function resultWorkbook() {
   sheet.D1 = {t: 's', v: 'Срок годности'};
   sheet.F1 = {t: 's', v: 'Артикул'};
   sheet.E1 = {t: 's', v: 'Комментарий'};
+  sheet.G1 = {t: 's', v: 'Статус'};
   XLSX.utils.book_append_sheet(book, sheet, 'КИЗ'); return book;
 }
 $('export').onclick = () => {
@@ -165,7 +169,7 @@ $('export').onclick = () => {
 };
 $('json').onclick = () => {
   diagnostic('export.json', {count: results.length});
-  const url = URL.createObjectURL(new Blob([JSON.stringify(results.map(({expirationDate, article, ...row}) => ({...row, 'Срок годности': expirationDate, 'Артикул': article})), null, 2)], {type: 'application/json'}));
+  const url = URL.createObjectURL(new Blob([JSON.stringify(results.map(({expirationDate, article, status = '', ...row}) => ({...row, 'Срок годности': expirationDate, 'Артикул': article, 'Статус': status})), null, 2)], {type: 'application/json'}));
   const a = document.createElement('a'); a.href = url; a.download = 'kiz-results.json'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 status().catch(error);
@@ -196,7 +200,7 @@ controls();
 
 function rebuildCodes() {
   codes = [...new Set([...fileCodes, ...manualCodes].map(full => full.slice(0, 24)))];
-  results = []; render();
+  results = barcodeResults(); render();
   $('manualStatus').textContent = `Вручную добавлено: ${manualCodes.size}. Всего уникальных КИЗ: ${codes.length}.`;
   $('progress').textContent = codes.length ? 'Готово к запросу.' : 'Нет КИЗ для запроса.';
 }
@@ -266,6 +270,8 @@ $('chooseArchive').onclick = async () => {
 };
 $('clearData').onclick = () => {
   if (busy || importing || !confirm('Вы уверены что хотите очистить список отсканированных и загруженных КИЗ')) return;
+  barcodeRows.length = 0;
+  $('barcodeInput').value = ''; $('barcodeComment').value = ''; $('barcodeDate').value = ''; $('barcodeStatus').textContent = '';
   manualCodes.clear(); manualComments.clear(); fileCodes = []; rows = []; workbook = undefined;
   $('file').value = ''; $('sheet').replaceChildren(); $('column').replaceChildren();
   $('importErrors').textContent = ''; $('fileStatus').textContent = 'Файл не выбран.';
@@ -312,4 +318,68 @@ $('catalogFile').onchange = async () => {
     $('catalogErrors').textContent = `Справочник не обновлён. Предыдущие данные сохранены.\n${e.message}`;
     diagnostic('catalog.failed', {errorKind: e.name});
   } finally { catalogLoading = false; $('catalogFile').value = ''; controls(); }
+};
+
+// Barcode scans are independent entries, including repeated GTINs.
+function barcodeResults() {
+  return barcodeRows.map(row => ({...row, article: articleFor(row.gtin, catalog)}));
+}
+function refreshBarcodeResults() {
+  results = [...results.filter(row => row.cis), ...barcodeResults()];
+  render();
+}
+function archiveBarcodeResults() {
+  if (!results.length) return;
+  const receivedAt = new Date(), count = results.length;
+  let bytes;
+  try { bytes = XLSX.write(resultWorkbook(), {type: 'array', bookType: 'xlsx'}); }
+  catch (e) { $('archiveStatus').textContent = `Автоархив не сохранён: ${e.message} Используйте ручную выгрузку.`; return; }
+  // Snapshot each saved scan and serialize writes to avoid filename collisions.
+  barcodeArchiveQueue = barcodeArchiveQueue.then(async () => {
+    try {
+      await archiveReady;
+      const name = await archive.write(bytes, receivedAt);
+      $('archiveStatus').textContent = `Автоматически сохранено: ${name}. Строк: ${count}.`;
+      diagnostic('archive.saved', {count});
+    } catch (e) {
+      $('archiveStatus').textContent = `Автоархив не сохранён: ${e.message} Результаты доступны по кнопке «Скачать Excel».`;
+      diagnostic('archive.failed', {errorKind: e.name});
+    }
+  });
+}
+$('scanBarcode').onclick = () => {
+  $('barcodeStatus').textContent = ''; $('barcodeInput').value = '';
+  $('barcodeDialog').showModal(); $('barcodeInput').focus();
+};
+$('closeBarcode').onclick = () => $('barcodeDialog').close();
+$('barcodeForm').onsubmit = event => {
+  event.preventDefault();
+  if (busy || importing || catalogLoading) return;
+  const input = $('barcodeInput');
+  if (!/^[0-9]{13}$/.test(input.value)) {
+    $('barcodeStatus').textContent = 'Отсканирован не ШК';
+    input.select(); input.focus(); return;
+  }
+  const date = $('barcodeDate');
+  if (date.validity.badInput || (date.value && !/^\d{4}-\d{2}-\d{2}$/.test(date.value))) {
+    $('barcodeStatus').textContent = 'Введите корректный срок годности.'; date.focus(); return;
+  }
+  const comment = $('barcodeComment').value.trim();
+  barcodeRows.push({cis: '', cis_full: '', gtin: '0' + input.value,
+    expirationDate: formatExpirationDate(date.value), comment, status: '', error: ''});
+  if (comment) {
+    recentComments = [comment, ...recentComments.filter(item => item !== comment)].slice(0, 5);
+    updateCommentHistory();
+    chrome.storage.local.set({recentScanComments: recentComments}).catch(error);
+  }
+  refreshBarcodeResults(); archiveBarcodeResults();
+  $('barcodeStatus').textContent = `ШК сохранён. Добавлено товаров без КИЗ: ${barcodeRows.length}. Можно сканировать следующий.`;
+  input.value = ''; input.focus();
+};
+$('clearBarcodes').onclick = () => {
+  if (busy || importing || catalogLoading) return;
+  barcodeRows.length = 0; refreshBarcodeResults(); archiveBarcodeResults();
+  $('barcodeInput').value = '';
+  $('barcodeStatus').textContent = 'Ручной ввод ШК очищен. КИЗ сохранены.';
+  $('barcodeInput').focus();
 };

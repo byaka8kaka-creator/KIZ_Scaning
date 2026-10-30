@@ -28,7 +28,7 @@ globalThis.fetch = async (url, options) => {
   if (url.endsWith('/auth/key')) return new Response(JSON.stringify({uuid: 'uuid', data: 'challenge-data'}));
   if (url.endsWith('/auth/simpleSignIn')) return new Response(JSON.stringify({token: 'test-token'}));
   if (failStatus) { const status = failStatus; failStatus = 0; return new Response('', {status}); }
-  return new Response(JSON.stringify(JSON.parse(options.body).map(cis => ({cisInfo: {cis, gtin: '01234567890123', expirationDate: '2027-10-05T00:00:00.000Z'}}))));
+  return new Response(JSON.stringify(JSON.parse(options.body).map(cis => ({cisInfo: {cis, gtin: '01234567890123', expirationDate: '2027-10-05T00:00:00.000Z', status: 'INTRODUCED'}}))));
 };
 await import('../extension/background.js');
 const message = (data, sender = {url: 'https://kiz.test/app.html'}) => new Promise(resolve => listener(data, sender, resolve));
@@ -42,7 +42,7 @@ try {
   await page.addInitScript(() => {
     window.archiveWrites = [];
     const files = new Set();
-    window.showDirectoryPicker = async () => ({
+    window.showDirectoryPicker = window.workingDirectoryPicker = async () => ({
       queryPermission: async () => 'granted',
       getFileHandle: async (name, options) => {
         if (!files.has(name) && !options?.create) throw new DOMException('missing', 'NotFoundError');
@@ -184,6 +184,57 @@ try {
   assert.equal(jsonRows.length, 2);
   assert.equal(jsonRows[0]['Артикул'], '000B');
   assert.equal('article' in jsonRows[0], false);
+  assert.equal(jsonRows[0]['Статус'], 'INTRODUCED');
+  assert.equal(XLSX.utils.sheet_to_json(exported.Sheets['КИЗ'])[0]['Статус'], 'INTRODUCED');
+  assert.equal(archiveRows[0]['Статус'], 'INTRODUCED');
+  assert.equal(await page.locator('#results tr').first().locator('td').nth(6).textContent(), 'INTRODUCED');
+  await page.evaluate(() => { window.showDirectoryPicker = window.workingDirectoryPicker; });
+  await page.locator('#chooseArchive').click();
+  const beforeBarcodeCalls = calls.length;
+  await page.locator('#scanBarcode').click();
+  await page.locator('#barcodeComment').fill('Без маркировки');
+  const historyBefore = JSON.stringify(stores.local.recentScanComments);
+  for (const invalid of ['123456789012', '12345678901234', '123456789012a', '123456789012я', ' 1234567890123', '123456789012!']) {
+    await page.locator('#barcodeInput').fill(invalid);
+    await page.locator('#barcodeInput').press('Enter');
+    assert.equal(await page.locator('#barcodeStatus').textContent(), 'Отсканирован не ШК');
+    assert.equal(await page.locator('#results tr').count(), 2);
+    assert.equal(JSON.stringify(stores.local.recentScanComments), historyBefore);
+  }
+  for (const date of ['2028-02-29', '2029-03-01']) {
+    await page.locator('#barcodeDate').fill(date);
+    await page.locator('#barcodeInput').fill('1234567890123');
+    await page.locator('#barcodeInput').press('Enter');
+  }
+  assert.equal(calls.length, beforeBarcodeCalls);
+  assert.equal(await page.locator('#results tr').count(), 4);
+  assert.deepEqual(await page.locator('#results tr').nth(2).locator('td').allTextContents(),
+    ['', '', '01234567890123', '29.02.2028', 'Без маркировки', '000B', '', '']);
+  assert.equal(stores.local.recentScanComments[0], 'Без маркировки');
+  await page.locator('#closeBarcode').click();
+  await page.waitForFunction(() => archiveWrites.some(w => {
+    const b = XLSX.read(new Uint8Array(w.bytes), {type: 'array'});
+    return XLSX.utils.sheet_to_json(b.Sheets['КИЗ']).length === 4;
+  }));
+  const barcodeJsonPromise = page.waitForEvent('download');
+  await page.locator('#json').click();
+  const barcodeJson = JSON.parse(await readFile(await (await barcodeJsonPromise).path(), 'utf8'));
+  assert.equal(barcodeJson[2].cis, ''); assert.equal(barcodeJson[2].cis_full, '');
+  assert.equal(barcodeJson[2].gtin, '01234567890123');
+  assert.equal(barcodeJson[2]['Срок годности'], '29.02.2028');
+  assert.equal(barcodeJson[3]['Срок годности'], '01.03.2029');
+  assert.equal(barcodeJson[2]['Статус'], '');
+  const barcodeExcelPromise = page.waitForEvent('download'); await page.locator('#export').click();
+  const barcodeBook = XLSX.read(await readFile(await (await barcodeExcelPromise).path()), {type: 'buffer', cellNF: true});
+  assert.equal(XLSX.utils.sheet_to_json(barcodeBook.Sheets['КИЗ'])[2].gtin, '01234567890123');
+  assert.equal(barcodeBook.Sheets['КИЗ'].D4.t, 'n');
+  await page.locator('#run').click();
+  await page.getByText(/Завершено. Получено 1 из 1/).waitFor();
+  assert.deepEqual(JSON.parse(calls.at(-1).body), [code]);
+  assert.equal(await page.locator('#results tr').count(), 4);
+  await page.locator('#scanBarcode').click(); await page.locator('#clearBarcodes').click();
+  assert.equal(await page.locator('#results tr').count(), 2);
+  await page.locator('#closeBarcode').click();
   failStatus = 403;
   await page.locator('#run').click(); await page.locator('#error').filter({hasText: /HTTP 403/}).waitFor();
   assert.equal(stores.local.auth.token, 'test-token');
@@ -306,6 +357,25 @@ try {
   assert.equal(await page.locator('#results tr').count(), 0);
   assert.equal(await page.locator('#scanComment').inputValue(), '');
   assert.equal(await page.locator('#commentHistory option').count(), 5);
+  // Barcode-only scanning works with expired authorization; clearing CIS preserves barcodes.
+  const noAuthCalls = calls.length;
+  await page.locator('#scanBarcode').click();
+  await page.locator('#barcodeInput').fill('0000000000001');
+  await page.locator('#barcodeInput').press('Enter');
+  await page.locator('#closeBarcode').click();
+  assert.equal(await page.locator('#results tr').count(), 1);
+  assert.equal(await page.locator('#results td').nth(2).textContent(), '00000000000001');
+  assert.equal(await page.locator('#json').isEnabled(), true);
+  assert.equal(calls.length, noAuthCalls);
+  await page.locator('#scan').click();
+  await page.locator('#scanInput').fill('M'.repeat(24));
+  await page.locator('#scanInput').press('Enter');
+  await page.locator('#clearScans').click();
+  await page.locator('#closeScan').click();
+  assert.equal(await page.locator('#results tr').count(), 1);
+  await page.locator('#scanBarcode').click(); await page.locator('#clearBarcodes').click();
+  await page.locator('#closeBarcode').click();
+  assert.equal(await page.locator('#results tr').count(), 0);
   const logPromise = page.waitForEvent('download');
   await page.locator('#downloadLog').click();
   const logDownload = await logPromise;
