@@ -78,14 +78,20 @@ test('Russian Shift+7 maps question mark to ampersand without corrupting Latin s
   assert.deepEqual(parsed.codes, [expected.slice(0, 24)]);
 });
 
-test('scanner commas become question marks before CIS extraction', () => {
+test('scanner commas change only in rows containing Russian letters', () => {
+  const latin = '0104650096354493215O1KL,';
+  const raw = '0104650096354493215Щ1ЛД,';
   const expected = '0104650096354493215O1KL?';
-  assert.equal(correctKeyboardLayout('0104650096354493215O1KL,'), expected);
+  assert.equal(correctKeyboardLayout(latin), latin);
+  assert.equal(correctKeyboardLayout(raw), expected);
   assert.equal(correctKeyboardLayout(expected), expected);
   assert.equal(correctKeyboardLayout('ш,?\u001d,'), 'i?&\u001d?');
-  const parsed = extractCodes([['0104650096354493215O1KL,'], [expected]], 0, false);
-  assert.deepEqual(parsed.fullCodes, [expected]);
-  assert.deepEqual(parsed.codes, [expected]);
+  assert.equal(correctKeyboardLayout('O,?\u001d,'), 'O,?\u001d,');
+  assert.equal(correctKeyboardLayout('ё,'), '`?');
+  // Each Excel row determines its layout independently.
+  const parsed = extractCodes([[raw], [latin], [expected]], 0, false);
+  assert.deepEqual(parsed.fullCodes, [expected, latin]);
+  assert.deepEqual(parsed.codes, [expected, latin]);
 });
 
 test('API product status supports nested, flat and absent values', () => {

@@ -38,10 +38,8 @@ export async function request(path, {body, token, fetchImpl = fetch} = {}) {
 const ruKeys = 'ё1234567890-йцукенгшщзхъфывапролджэячсмитьбю';
 const enKeys = "`1234567890-qwertyuiop[]asdfghjkl;'zxcvbnm,.";
 export function correctKeyboardLayout(value) {
-  // Shift+7 is ambiguous: translate existing question marks only with Cyrillic evidence.
-  if (/[ёа-яЁА-Я]/.test(value)) value = value.replace(/\?/g, '&');
-  // Russian Shift+/ produces a comma, including in scans without Cyrillic letters.
-  value = value.replace(/,/g, '?');
+  // Translate punctuation only when this scan contains Russian letters.
+  if (/[ёа-яЁА-Я]/.test(value)) value = value.replace(/[?,]/g, char => char === '?' ? '&' : '?');
   return value.replace(/[ёа-яЁА-Я]/g, char => {
     const index = ruKeys.indexOf(char.toLowerCase());
     const replacement = enKeys[index];
