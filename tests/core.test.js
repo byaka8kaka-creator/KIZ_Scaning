@@ -78,6 +78,16 @@ test('Russian Shift+7 maps question mark to ampersand without corrupting Latin s
   assert.deepEqual(parsed.codes, [expected.slice(0, 24)]);
 });
 
+test('scanner commas become question marks before CIS extraction', () => {
+  const expected = '0104650096354493215O1KL?';
+  assert.equal(correctKeyboardLayout('0104650096354493215O1KL,'), expected);
+  assert.equal(correctKeyboardLayout(expected), expected);
+  assert.equal(correctKeyboardLayout('ш,?\u001d,'), 'i?&\u001d?');
+  const parsed = extractCodes([['0104650096354493215O1KL,'], [expected]], 0, false);
+  assert.deepEqual(parsed.fullCodes, [expected]);
+  assert.deepEqual(parsed.codes, [expected]);
+});
+
 test('API product status supports nested, flat and absent values', () => {
   const rows = parseResults([{cisInfo: {cis: 'a', status: 'INTRODUCED'}}, {cis: 'b', status: 'RETIRED'}, {cisInfo: {cis: 'c'}}], ['a', 'b', 'c', 'd']);
   assert.deepEqual(rows.map(row => row.status), ['INTRODUCED', 'RETIRED', '', '']);
