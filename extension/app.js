@@ -1,5 +1,5 @@
 import {extractCodes, excelExpirationDate, correctKeyboardLayout, attachFullCodes, formatExpirationDate} from './core.js';
-import {parseCatalog, articleFor} from './catalog.js';
+import {parseCatalog, articleFor, unitFor} from './catalog.js';
 import {Archive} from './archive.js';
 const archive = new Archive();
 let archiveReady = archive.restore().catch(() => false);
@@ -116,7 +116,7 @@ function render() {
   // Keep the view responsive; export always contains all rows.
   for (const row of results.slice(0, 1000)) {
     const tr = document.createElement('tr');
-    for (const key of ['cis', 'cis_full', 'gtin', 'expirationDate', 'comment', 'article', 'status', 'error']) { const td = document.createElement('td'); td.textContent = row[key] ?? ''; tr.append(td); }
+    for (const key of ['cis', 'cis_full', 'gtin', 'expirationDate', 'comment', 'article', 'status', 'unit', 'error']) { const td = document.createElement('td'); td.textContent = row[key] ?? ''; tr.append(td); }
     $('results').append(tr);
   }
   controls();
@@ -130,7 +130,7 @@ $('run').onclick = async () => {
     for (let i = 0; i < codes.length && !stopping; i += 100) {
       $('progress').textContent = `Запрос: ${i + 1}–${Math.min(i + 100, codes.length)} из ${codes.length}…`;
       const batch = await send({type: 'query', codes: codes.slice(i, i + 100)});
-      results.push(...attachFullCodes(batch, [...fileCodes, ...manualCodes]).map(row => ({...row, comment: manualComments.get(row.cis_full) || '', article: articleFor(row.gtin, catalog)}))); receivedAt = new Date(); processed += batch.length; render();
+      results.push(...attachFullCodes(batch, [...fileCodes, ...manualCodes]).map(row => ({...row, comment: manualComments.get(row.cis_full) || '', article: articleFor(row.gtin, catalog), unit: unitFor(row.gtin, catalog)}))); receivedAt = new Date(); processed += batch.length; render();
     }
     $('progress').textContent = `${stopping ? 'Остановлено' : 'Завершено'}. Получено ${processed} из ${codes.length}. Ошибок по КИЗ: ${results.filter(r => r.error).length}. В таблице показаны первые 1000 строк; экспорт содержит все результаты.`;
   } catch (e) { error(e); $('progress').textContent = `Обработка прервана. Сохранено ${results.length} из ${codes.length}; доступен экспорт частичных результатов.`; }
@@ -152,7 +152,7 @@ $('run').onclick = async () => {
 $('stop').onclick = () => { stopping = true; diagnostic('query.stopped'); controls(); };
 function resultWorkbook() {
   const book = XLSX.utils.book_new();
-  const sheet = XLSX.utils.json_to_sheet(results, {header: ['cis', 'cis_full', 'gtin', 'expirationDate', 'comment', 'article', 'status', 'error']});
+  const sheet = XLSX.utils.json_to_sheet(results, {header: ['cis', 'cis_full', 'gtin', 'expirationDate', 'comment', 'article', 'status', 'unit', 'error']});
   results.forEach((row, i) => {
     const serial = excelExpirationDate(row.expirationDate);
     if (serial !== null) sheet[XLSX.utils.encode_cell({r: i + 1, c: 3})] = {t: 'n', v: serial, z: 'dd"."mm"."yyyy'};
@@ -160,6 +160,7 @@ function resultWorkbook() {
   sheet.D1 = {t: 's', v: 'Срок годности'};
   sheet.F1 = {t: 's', v: 'Артикул'};
   sheet.E1 = {t: 's', v: 'Комментарий'};
+  sheet.H1 = {t: 's', v: 'Единица измерений'};
   sheet.G1 = {t: 's', v: 'Статус'};
   XLSX.utils.book_append_sheet(book, sheet, 'КИЗ'); return book;
 }
@@ -169,7 +170,7 @@ $('export').onclick = () => {
 };
 $('json').onclick = () => {
   diagnostic('export.json', {count: results.length});
-  const url = URL.createObjectURL(new Blob([JSON.stringify(results.map(({expirationDate, article, status = '', ...row}) => ({...row, 'Срок годности': expirationDate, 'Артикул': article, 'Статус': status})), null, 2)], {type: 'application/json'}));
+  const url = URL.createObjectURL(new Blob([JSON.stringify(results.map(({expirationDate, article, unit = '', status = '', ...row}) => ({...row, 'Срок годности': expirationDate, 'Артикул': article, 'Единица измерений': unit, 'Статус': status})), null, 2)], {type: 'application/json'}));
   const a = document.createElement('a'); a.href = url; a.download = 'kiz-results.json'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 status().catch(error);
@@ -305,7 +306,7 @@ $('catalogFile').onchange = async () => {
     // Commit only after validation and successful persistence. Invalid uploads preserve the previous catalog.
     await chrome.storage.local.set({articleCatalog: {entries, loadedAt}});
     catalog = new Map(entries); catalogLoadedAt = loadedAt; catalogStatus();
-    results = results.map(row => ({...row, article: articleFor(row.gtin, catalog)})); render();
+    results = results.map(row => ({...row, article: articleFor(row.gtin, catalog), unit: unitFor(row.gtin, catalog)})); render();
     diagnostic('catalog.loaded', {count: catalog.size});
     if (results.length) {
       try {
@@ -322,7 +323,7 @@ $('catalogFile').onchange = async () => {
 
 // Barcode scans are independent entries, including repeated GTINs.
 function barcodeResults() {
-  return barcodeRows.map(row => ({...row, article: articleFor(row.gtin, catalog)}));
+  return barcodeRows.map(row => ({...row, article: articleFor(row.gtin, catalog), unit: unitFor(row.gtin, catalog)}));
 }
 function refreshBarcodeResults() {
   results = [...results.filter(row => row.cis), ...barcodeResults()];

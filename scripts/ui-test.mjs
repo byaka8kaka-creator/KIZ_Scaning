@@ -109,7 +109,7 @@ try {
     XLSX.utils.book_append_sheet(book, XLSX.utils.aoa_to_sheet(rows), 'Справочник');
     await page.locator('#catalogFile').setInputFiles({name: `catalog.${bookType}`, mimeType: 'application/octet-stream', buffer: XLSX.write(book, {type: 'buffer', bookType})});
   }
-  await uploadCatalog([['GTIN', 'Артикул'], ['01234567890123', '000A'], ['01234567890124', '000A']], 'xls');
+  await uploadCatalog([['GTIN', 'Артикул', 'Единица измерений'], ['01234567890123', '000A', 'шт'], ['01234567890124', '000A', 'кг']], 'xls');
   await page.locator('#catalogStatus').filter({hasText: 'Записей: 2.'}).waitFor();
   await page.locator('#archiveStatus').filter({hasText: 'обновлёнными артикулами сохранены'}).waitFor();
   assert.equal(await page.locator('#results tr td').nth(5).textContent(), '000A');
@@ -117,12 +117,14 @@ try {
   const catalogArchive = await page.evaluate(() => archiveWrites.at(-1));
   const archivedArticles = XLSX.read(Buffer.from(catalogArchive.bytes), {type: 'buffer'});
   assert.equal(XLSX.utils.sheet_to_json(archivedArticles.Sheets['КИЗ'])[0]['Артикул'], '000A');
+  assert.equal(XLSX.utils.sheet_to_json(archivedArticles.Sheets['КИЗ'])[0]['Единица измерений'], 'шт');
+  assert.equal(await page.locator('#results tr td').nth(7).textContent(), 'шт');
   const previousCatalog = JSON.stringify(stores.local.articleCatalog);
   await uploadCatalog([['GTIN', 'Артикул'], ['01234567890123', 'wrong'], ['01234567890123', 'other']]);
   await page.locator('#catalogErrors').filter({hasText: 'строки 2 и 3'}).waitFor();
   assert.equal(JSON.stringify(stores.local.articleCatalog), previousCatalog);
   assert.equal(await page.locator('#results tr td').nth(5).textContent(), '000A');
-  await uploadCatalog([['GTIN', 'Артикул'], ['01234567890123', '000B'], ['01234567890124', '000B']]);
+  await uploadCatalog([['GTIN', 'Артикул', 'Единица измерений'], ['01234567890123', '000B', 'упак'], ['01234567890124', '000B', 'кг']]);
   await page.locator('#results tr td').nth(5).filter({hasText: '000B'}).waitFor();
   await page.locator('#loadCatalog').waitFor({state: 'visible'});
   assert.equal(calls.length, apiCallsBeforeCatalog);
@@ -184,6 +186,9 @@ try {
   assert.equal(jsonRows.length, 2);
   assert.equal(jsonRows[0]['Артикул'], '000B');
   assert.equal('article' in jsonRows[0], false);
+  assert.equal(jsonRows[0]['Единица измерений'], 'упак');
+  assert.equal('unit' in jsonRows[0], false);
+  assert.equal(XLSX.utils.sheet_to_json(exported.Sheets['КИЗ'])[0]['Единица измерений'], 'упак');
   assert.equal(jsonRows[0]['Статус'], 'INTRODUCED');
   assert.equal(XLSX.utils.sheet_to_json(exported.Sheets['КИЗ'])[0]['Статус'], 'INTRODUCED');
   assert.equal(archiveRows[0]['Статус'], 'INTRODUCED');
@@ -209,7 +214,7 @@ try {
   assert.equal(calls.length, beforeBarcodeCalls);
   assert.equal(await page.locator('#results tr').count(), 4);
   assert.deepEqual(await page.locator('#results tr').nth(2).locator('td').allTextContents(),
-    ['', '', '01234567890123', '29.02.2028', 'Без маркировки', '000B', '', '']);
+    ['', '', '01234567890123', '29.02.2028', 'Без маркировки', '000B', '', 'упак', '']);
   assert.equal(stores.local.recentScanComments[0], 'Без маркировки');
   await page.locator('#closeBarcode').click();
   await page.waitForFunction(() => archiveWrites.some(w => {
@@ -393,7 +398,7 @@ try {
   await page.route('https://kiz.test/vendor/xlsx.full.min.js', route => route.abort());
   await page.reload();
   await page.locator('#catalogStatus').filter({hasText: 'Записей: 2.'}).waitFor();
-  assert.equal(stores.local.articleCatalog.entries[0][1], '000B');
+  assert.equal(stores.local.articleCatalog.entries[0][1].unit, 'упак');
   await page.locator('#error').filter({hasText: 'Библиотека Excel не загружена'}).waitFor();
   assert.equal(await page.locator('#file').isDisabled(), true);
   assert.equal(await page.locator('#run').isDisabled(), true);
