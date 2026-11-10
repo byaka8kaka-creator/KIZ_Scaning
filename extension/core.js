@@ -8,7 +8,7 @@ export function tokenValid(auth, now = Date.now()) {
 export class ApiError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
-export async function request(path, {body, token, fetchImpl = fetch} = {}) {
+export async function request(path, {body, token, fetchImpl = fetch, responseType = 'json'} = {}) {
   const headers = {Accept: 'application/json'};
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -31,7 +31,7 @@ export async function request(path, {body, token, fetchImpl = fetch} = {}) {
       ? 'Токен недействителен. Авторизуйтесь повторно.'
       : `API вернул HTTP ${response.status}. Повторите запрос позже или проверьте доступ к Честному знаку.`);
   }
-  try { return await response.json(); }
+  try { return responseType === 'text' ? await response.text() : await response.json(); }
   catch { throw new Error('API вернул некорректный JSON.'); }
 }
 // Physical Russian keyboard keys -> Latin keys. Shift+7 differs between layouts. GS stays intact.

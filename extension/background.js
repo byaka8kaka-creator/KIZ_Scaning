@@ -1,3 +1,4 @@
+import {eligibleReturns, returnDocument, documentBase64, RETURN_BATCH_SIZE, RETURN_PATH} from './returns.js';
 import {TOKEN_TTL, SIGN_PAGE, tokenValid, request, parseResults} from './core.js';
 import {configureAccess, record} from './diagnostics.js';
 // Register listeners synchronously. Optional compatibility features must never stop startup.
@@ -31,6 +32,7 @@ async function failAutomatic(reason) {
   await closeAutomatic(challenge);
 }
 chrome.alarms?.onAlarm.addListener(alarm => {
+  if (alarm.name === 'return-signing') void failReturn('Истекло время ожидания подписи.');
   if (alarm.name === 'automatic-auth') void failAutomatic('timeout');
 });
 async function begin(automatic = false) {
@@ -96,11 +98,100 @@ async function signIn(signature) {
   }
   return authState();
 }
+async function returnState() {
+  const {returnJob} = await challengeStorage.get('returnJob');
+  const {returnHistory = []} = await chrome.storage.local.get('returnHistory');
+  return {state: returnJob?.state || 'idle', error: returnJob?.error || '', rows: returnHistory, data: returnJob?.state === 'signing' ? returnJob.data : ''};
+}
+async function closeReturn(job) {
+  await chrome.alarms?.clear('return-signing');
+  if (job?.automatic && Number.isInteger(job.windowId)) await chrome.windows.remove(job.windowId).catch(() => {});
+}
+async function failReturn(error) {
+  const {returnJob} = await challengeStorage.get('returnJob');
+  if (!returnJob || !['signing', 'submitting'].includes(returnJob.state)) return;
+  await challengeStorage.set({returnJob: {...returnJob, state: 'failed', error, token: null}});
+  await closeReturn(returnJob);
+}
+async function openReturnBatch(job) {
+  const batch = job.remaining.slice(0, RETURN_BATCH_SIZE);
+  if (!batch.length) {
+    await challengeStorage.set({returnJob: {...job, state: 'complete', data: '', token: null, batch: [], remaining: []}}); return;
+  }
+  const data = returnDocument(batch);
+  let tab, windowId;
+  if (job.automatic) {
+    const window = await chrome.windows.create({url: 'about:blank', type: 'popup', state: 'minimized', focused: false});
+    windowId = window.id; tab = window.tabs?.[0];
+  } else tab = await chrome.tabs.create({url: 'about:blank'});
+  const pending = {...job, batch, data, tabId: tab?.id, windowId, state: 'signing'};
+  await challengeStorage.set({returnJob: pending});
+  if (!Number.isInteger(tab?.id)) throw new Error('Не удалось открыть КриптоПро.');
+  await chrome.alarms?.create('return-signing', {delayInMinutes: 5});
+  await chrome.tabs.update(tab.id, {url: SIGN_PAGE});
+}
+let returnStarting = false;
+async function beginReturn(message) {
+  if (returnStarting) throw new Error('Возврат уже запускается.');
+  returnStarting = true;
+  try { return await beginReturnOnce(message); } finally { returnStarting = false; }
+}
+async function beginReturnOnce(message) {
+  const current = (await challengeStorage.get('returnJob')).returnJob;
+  if (current && ['signing', 'submitting'].includes(current.state)) throw new Error('Возврат уже выполняется.');
+  const {returnDocuments = {}} = await chrome.storage.local.get('returnDocuments');
+  if (!Array.isArray(message.rows)) throw new Error('Не переданы результаты КИЗ.');
+  const rows = eligibleReturns(message.rows, returnDocuments);
+  if (!rows.length) throw new Error('Товаров на возврат нету');
+  const {lastQueryAuth} = await challengeStorage.get('lastQueryAuth');
+  if (!tokenValid(lastQueryAuth)) throw new Error('Получите данные КИЗ с действующим токеном перед возвратом.');
+  try { await openReturnBatch({remaining: rows, token: lastQueryAuth.token, automatic: message.automatic === true, detached: message.detached === true}); }
+  catch (e) { await failReturn(e.message); throw e; }
+  return returnState();
+}
+let returnSubmission = null;
+async function submitReturn(signature) {
+  if (returnSubmission) throw new Error('Документ уже отправляется.');
+  returnSubmission = submitReturnOnce(signature).finally(() => {returnSubmission = null;});
+  return returnSubmission;
+}
+async function submitReturnOnce(signature) {
+  const {returnJob: job} = await challengeStorage.get('returnJob');
+  if (job?.state !== 'signing') throw new Error('Нет документа для подписи.');
+  const signed = String(signature ?? '').replace(/\s/g, '');
+  if (signed.length < 40 || signed.length > 2_000_000 || !/^[A-Za-z0-9+/]+={0,2}$/.test(signed)) throw new Error('Вставьте полную подпись в формате Base64.');
+  await challengeStorage.set({returnJob: {...job, state: 'submitting'}});
+  try {
+    const raw = await request(RETURN_PATH, {token: job.token, responseType: 'text', body: {
+      document_format: 'MANUAL', product_document: documentBase64(job.data), type: 'LP_RETURN', signature: signed
+    }});
+    const document = raw.trim().replace(/^"|"$/g, '');
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(document)) throw new Error('API не вернул номер документа. Проверьте документ в личном кабинете перед повторной отправкой.');
+    const {returnDocuments = {}} = await chrome.storage.local.get('returnDocuments');
+    const {returnHistory = []} = await chrome.storage.local.get('returnHistory');
+    for (const row of job.batch) returnDocuments[row.cis] = document;
+    await chrome.storage.local.set({returnDocuments, returnHistory: [...returnHistory, ...job.batch.map(row => ({...row, returnDocument: document}))]});
+    await closeReturn(job);
+    await openReturnBatch({...job, remaining: job.remaining.slice(job.batch.length)});
+    return returnState();
+  } catch (error) {
+    await failReturn(error.message + ' Отправка остановлена. При неизвестном результате проверьте документы в личном кабинете перед повтором.');
+    throw error;
+  }
+}
 async function handle(message, sender) {
   const isApp = sender.url === chrome.runtime.getURL('app.html');
   const isSigner = sender.url?.split('?')[0].split('#')[0] === SIGN_PAGE;
   if (!isApp && !isSigner) throw new Error('Недопустимый источник сообщения.');
   if (isSigner) {
+    const {returnJob} = await challengeStorage.get('returnJob');
+    if (returnJob?.state === 'signing' && sender.tab?.id === returnJob.tabId) {
+      if (message.type === 'challenge') return {data: returnJob.data, automatic: returnJob.automatic, detached: returnJob.detached, purpose: 'return'};
+      if (message.type === 'signature') return submitReturn(message.signature);
+      if (message.type === 'autoFailure') { await failReturn('Не удалось подписать документ. Проверьте КриптоПро.'); return {}; }
+      if (message.type === 'diagnostic') return {};
+      throw new Error('Недопустимая команда.');
+    }
     const {challenge} = await challengeStorage.get('challenge');
     if (!challenge || sender.tab?.id !== challenge.tabId) throw new Error('Нет активного запроса подписи для этой вкладки.');
     if (message.type === 'diagnostic' && ['signer.loaded', 'signer.field_missing', 'signer.data_filled', 'signer.signature_missing', 'signer.auto_selected', 'signer.auto_signing'].includes(message.event)) { await record(message.event); return {}; }
@@ -118,6 +209,14 @@ async function handle(message, sender) {
       if (allowed.includes(message.event)) await record(message.event, message.details);
       return {};
     }
+    case 'returnStatus': return returnState();
+    case 'beginReturn': return beginReturn(message);
+    case 'returnSignature': return submitReturn(message.signature);
+    case 'cancelReturn': {
+      if ((await challengeStorage.get('returnJob')).returnJob?.state === 'submitting') throw new Error('Дождитесь ответа API на текущий документ.');
+      await failReturn('Возврат остановлен пользователем.');
+      return returnState();
+    }
     case 'clearLogs': await chrome.storage.local.set({diagnosticLog: []}); return {};
     case 'status': return authState();
     case 'begin': return exclusive(() => begin(message.automatic === true));
@@ -129,7 +228,11 @@ async function handle(message, sender) {
       }
       const {auth} = await chrome.storage.local.get('auth');
       if (!tokenValid(auth)) throw new Error('Необходима авторизация.');
-      try { return parseResults(await request('/cises/info', {body: codes, token: auth.token}), codes); }
+      try {
+        const rows = parseResults(await request('/cises/info', {body: codes, token: auth.token}), codes);
+        await challengeStorage.set({lastQueryAuth: auth});
+        return rows;
+      }
       catch (error) {
         if (error.status === 401) {
           await record('auth.token_rejected', {status: 401}, 'warn');
@@ -148,9 +251,9 @@ function exclusive(fn) {
 }
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
   const started = Date.now();
-  const operation = ['status', 'begin', 'signature', 'query', 'challenge', 'diagnostic', 'clearLogs', 'autoFailure'].includes(message?.type) ? message.type : 'unknown';
+  const operation = ['status', 'begin', 'signature', 'query', 'challenge', 'diagnostic', 'clearLogs', 'autoFailure', 'returnStatus', 'beginReturn', 'returnSignature', 'cancelReturn'].includes(message?.type) ? message.type : 'unknown';
   initialization.then(() => handle(message, sender)).then(async value => {
-    if (!['status', 'diagnostic', 'clearLogs'].includes(operation)) await record('operation.completed', {operation, durationMs: Date.now() - started, count: Array.isArray(value) ? value.length : 0});
+    if (!['status', 'returnStatus', 'diagnostic', 'clearLogs'].includes(operation)) await record('operation.completed', {operation, durationMs: Date.now() - started, count: Array.isArray(value) ? value.length : 0});
     reply({ok: true, value});
   }, async error => {
     await record('operation.failed', {operation, durationMs: Date.now() - started, status: error.status, errorKind: error.name}, 'error');

@@ -7,7 +7,7 @@ import XLSX from '@e965/xlsx';
 const stores = {local: {}, session: {}};
 let listener;
 const calls = [];
-let failStatus = 0;
+let failStatus = 0, productStatus = 'INTRODUCED';
 const automaticWindows = [], removedWindows = [];
 let alarmListener;
 const alarms = new Map();
@@ -27,8 +27,9 @@ globalThis.fetch = async (url, options) => {
   calls.push({url, ...options});
   if (url.endsWith('/auth/key')) return new Response(JSON.stringify({uuid: 'uuid', data: 'challenge-data'}));
   if (url.endsWith('/auth/simpleSignIn')) return new Response(JSON.stringify({token: 'test-token'}));
+  if (url.includes('/lk/documents/create')) return new Response(JSON.stringify('438cac2c-fbb5-4ef5-8a51-dfdb0cfea2e1'));
   if (failStatus) { const status = failStatus; failStatus = 0; return new Response('', {status}); }
-  return new Response(JSON.stringify(JSON.parse(options.body).map(cis => ({cisInfo: {cis, gtin: '01234567890123', expirationDate: '2027-10-05T00:00:00.000Z', status: 'INTRODUCED'}}))));
+  return new Response(JSON.stringify(JSON.parse(options.body).map(cis => ({cisInfo: {cis, gtin: '01234567890123', expirationDate: '2027-10-05T00:00:00.000Z', status: productStatus}}))));
 };
 await import('../extension/background.js');
 const message = (data, sender = {url: 'https://kiz.test/app.html'}) => new Promise(resolve => listener(data, sender, resolve));
@@ -54,7 +55,7 @@ try {
   });
   await page.route('https://kiz.test/**', async route => {
     const path = new URL(route.request().url()).pathname.slice(1);
-    if (!['app.html', 'app.css', 'app.js', 'core.js', 'diagnostics.js', 'archive.js', 'catalog.js', 'vendor/xlsx.full.min.js'].includes(path)) return route.abort();
+    if (!['app.html', 'app.css', 'app.js', 'core.js', 'diagnostics.js', 'archive.js', 'catalog.js', 'returns.js', 'vendor/xlsx.full.min.js'].includes(path)) return route.abort();
     await route.fulfill({body: await readFile(new URL('../' + (process.env.KIZ_TEST_SOURCE || 'dist') + '/' + path, import.meta.url)), contentType: path.endsWith('.js') ? 'text/javascript' : path.endsWith('.css') ? 'text/css' : 'text/html'});
   });
   await page.goto('https://kiz.test/app.html');
@@ -63,7 +64,7 @@ try {
   await page.locator('#archiveStatus').filter({hasText: 'Автосохранение включено'}).waitFor();
   await page.locator('#login').click();
   await page.getByText(/Подпишите данные в открывшейся/).waitFor();
-  await page.locator('summary').click();
+  await page.locator('summary').first().click();
   await page.locator('#signature').fill('A'.repeat(100));
   await page.locator('#signIn').click();
   await page.getByText(/Авторизация действует до/).waitFor();
@@ -381,6 +382,51 @@ try {
   await page.locator('#scanBarcode').click(); await page.locator('#clearBarcodes').click();
   await page.locator('#closeBarcode').click();
   assert.equal(await page.locator('#results tr').count(), 0);
+  // Return UI: real worker, detached CryptoPro fixture, archive and both downloads.
+  await page.locator('#returnStart').click();
+  await page.locator('#returnError').filter({hasText: 'Товаров на возврат нету'}).waitFor();
+  stores.local.auth = {token: 'test-token', expiresAt: Date.now() + 3600000};
+  productStatus = 'RETIRED';
+  await page.locator('#scan').click();
+  await page.locator('#scanInput').fill(code);
+  await page.locator('#scanInput').press('Enter');
+  await page.locator('#closeScan').click();
+  await page.locator('#run').click();
+  await page.locator('#progress').filter({hasText: 'Завершено'}).waitFor();
+  await page.locator('#returnDetached').check();
+  await page.locator('#chooseArchive').click();
+  await page.locator('#returnAuto').click();
+  await page.locator('#returnStatus').filter({hasText: 'Подпишите'}).waitFor();
+  await signer.reload();
+  await signer.evaluate(() => {
+    window.chrome = {runtime: {sendMessage: data => window.signerMessage(data)}};
+    document.getElementById('sign').onclick = () => {
+      window.returnDetachedAtSign = document.getElementById('detached').checked;
+      window.returnSignedData = document.getElementById('DataToSignTxtBox').value;
+      document.getElementById('SignatureTxtBox').value = 'D'.repeat(100);
+    };
+  });
+  await signer.addScriptTag({path: new URL('../extension/cryptopro.js', import.meta.url).pathname});
+  await page.locator('#returnStatus').filter({hasText: 'Возврат завершён'}).waitFor();
+  assert.equal(await signer.evaluate(() => window.returnDetachedAtSign), true);
+  assert.equal(JSON.parse(await signer.evaluate(() => window.returnSignedData)).products_list[0].ki, code);
+  const documentId = '438cac2c-fbb5-4ef5-8a51-dfdb0cfea2e1';
+  assert.equal(await page.locator('#returnResults tr td').last().textContent(), documentId);
+  await page.waitForFunction(() => archiveWrites.some(w => w.name.startsWith('Return')));
+  const returnedArchive = await page.evaluate(() => archiveWrites.find(w => w.name.startsWith('Return')));
+  const returnedBook = XLSX.read(Buffer.from(returnedArchive.bytes), {type: 'buffer'});
+  assert.equal(XLSX.utils.sheet_to_json(returnedBook.Sheets['КИЗ'])[0]['№Документа на возврат'], documentId);
+  for (const [button, format] of [['returnExcel', 'xlsx'], ['returnJson', 'json']]) {
+    const downloadPromise = page.waitForEvent('download');
+    await page.locator('#' + button).click();
+    const download = await downloadPromise;
+    const bytes = await readFile(await download.path());
+    const rows = format === 'json' ? JSON.parse(bytes) : XLSX.utils.sheet_to_json(XLSX.read(bytes, {type: 'buffer'}).Sheets['КИЗ']);
+    assert.equal(rows[0]['№Документа на возврат'], documentId);
+    assert.equal(rows[0].cis_full, code);
+  }
+  await page.locator('#returnStart').click();
+  await page.locator('#returnError').filter({hasText: 'Товаров на возврат нету'}).waitFor();
   const logPromise = page.waitForEvent('download');
   await page.locator('#downloadLog').click();
   const logDownload = await logPromise;
@@ -399,6 +445,8 @@ try {
   await page.reload();
   await page.locator('#catalogStatus').filter({hasText: 'Записей: 2.'}).waitFor();
   assert.equal(stores.local.articleCatalog.entries[0][1].unit, 'упак');
+  assert.equal(await page.locator('#returnDetached').isChecked(), true);
+  await page.locator('#returnResults tr td').last().filter({hasText: documentId}).waitFor();
   await page.locator('#error').filter({hasText: 'Библиотека Excel не загружена'}).waitFor();
   assert.equal(await page.locator('#file').isDisabled(), true);
   assert.equal(await page.locator('#run').isDisabled(), true);

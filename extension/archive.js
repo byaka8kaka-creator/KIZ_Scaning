@@ -38,10 +38,10 @@ export class Archive {
     try { await setting(this.handle, true); } catch { retained = false; }
     return retained;
   }
-  async write(bytes, receivedAt) {
+  async write(bytes, receivedAt, prefix = '') {
     if (!this.handle) throw new Error('Сначала выберите папку C:\\ExtensionKIZ\\Архив кнопкой «Выбрать папку архива».');
     if (await this.handle.queryPermission({mode: 'readwrite'}) !== 'granted') throw new Error('Доступ к папке архива не разрешён. Выберите папку повторно.');
-    const base = archiveFilename(receivedAt);
+    const base = prefix + archiveFilename(receivedAt);
     let name = base;
     for (let index = 1; ; index++) {
       try { await this.handle.getFileHandle(name); }

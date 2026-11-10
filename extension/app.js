@@ -150,10 +150,10 @@ $('run').onclick = async () => {
   }
 };
 $('stop').onclick = () => { stopping = true; diagnostic('query.stopped'); controls(); };
-function resultWorkbook() {
+function resultWorkbook(exportRows = results, returning = false) {
   const book = XLSX.utils.book_new();
-  const sheet = XLSX.utils.json_to_sheet(results, {header: ['cis', 'cis_full', 'gtin', 'expirationDate', 'comment', 'article', 'status', 'unit', 'error']});
-  results.forEach((row, i) => {
+  const sheet = XLSX.utils.json_to_sheet(exportRows, {header: ['cis', 'cis_full', 'gtin', 'expirationDate', 'comment', 'article', 'status', 'unit', 'error', ...(returning ? ['returnDocument'] : [])]});
+  exportRows.forEach((row, i) => {
     const serial = excelExpirationDate(row.expirationDate);
     if (serial !== null) sheet[XLSX.utils.encode_cell({r: i + 1, c: 3})] = {t: 'n', v: serial, z: 'dd"."mm"."yyyy'};
   });
@@ -162,6 +162,7 @@ function resultWorkbook() {
   sheet.E1 = {t: 's', v: 'Комментарий'};
   sheet.H1 = {t: 's', v: 'Единица измерений'};
   sheet.G1 = {t: 's', v: 'Статус'};
+  if (returning) sheet.J1 = {t: 's', v: '№Документа на возврат'};
   XLSX.utils.book_append_sheet(book, sheet, 'КИЗ'); return book;
 }
 $('export').onclick = () => {
@@ -384,3 +385,65 @@ $('clearBarcodes').onclick = () => {
   $('barcodeStatus').textContent = 'Ручной ввод ШК очищен. КИЗ сохранены.';
   $('barcodeInput').focus();
 };
+
+let returnRows = [], returning = false, returnPolling = false;
+const returnColumns = ['cis', 'cis_full', 'gtin', 'expirationDate', 'comment', 'article', 'status', 'unit', 'error', 'returnDocument'];
+chrome.storage.local.get('returnDetached').then(settings => { $('returnDetached').checked = settings.returnDetached === true; }).catch(error);
+$('returnDetached').onchange = () => chrome.storage.local.set({returnDetached: $('returnDetached').checked}).catch(error);
+function returnControls() {
+  for (const id of ['returnStart', 'returnAuto', 'returnDetached']) $(id).disabled = returning;
+  $('returnCancel').disabled = !returning;
+  $('returnExcel').disabled = !returnRows.length || !excelAvailable();
+  $('returnJson').disabled = !returnRows.length;
+}
+async function saveReturnArchive() {
+  try {
+    await archiveReady;
+    const name = await archive.write(XLSX.write(resultWorkbook(returnRows, true), {type: 'array', bookType: 'xlsx'}), new Date(), 'Return');
+    $('returnArchiveStatus').textContent = `Автоматически сохранено: ${name}.`;
+  } catch (e) { $('returnArchiveStatus').textContent = `Автоархив возврата не сохранён: ${e.message} Используйте «Скачать Excel».`; }
+}
+async function refreshReturns() {
+  if (returnPolling) return;
+  returnPolling = true;
+  try {
+    const state = await send({type: 'returnStatus'});
+    const changed = JSON.stringify(returnRows) !== JSON.stringify(state.rows);
+    returnRows = state.rows; returning = ['signing', 'submitting'].includes(state.state);
+    $('returnData').value = state.data;
+    $('returnSubmit').disabled = state.state !== 'signing';
+    $('returnError').textContent = state.error;
+    $('returnStatus').textContent = state.state === 'signing' ? 'Подпишите текущий пакет в КриптоПро.' : state.state === 'submitting' ? 'Документ отправляется…' : state.state === 'complete' ? 'Возврат завершён.' : state.state === 'failed' ? 'Возврат остановлен.' : 'Пока нет возвратов.';
+    $('returnResults').replaceChildren();
+    for (const row of returnRows.slice(0, 1000)) {
+      const tr = document.createElement('tr');
+      for (const key of returnColumns) { const td = document.createElement('td'); td.textContent = row[key] ?? ''; tr.append(td); }
+      $('returnResults').append(tr);
+    }
+    returnControls();
+    if (changed && returnRows.length) await saveReturnArchive();
+  } catch (e) { $('returnError').textContent = e.message; }
+  finally { returnPolling = false; }
+}
+async function startReturn(automatic) {
+  $('returnError').textContent = ''; returning = true; returnControls();
+  try { await send({type: 'beginReturn', rows: results, automatic, detached: $('returnDetached').checked}); }
+  catch (e) { returning = false; returnControls(); $('returnError').textContent = e.message; return; }
+  await refreshReturns();
+}
+$('returnStart').onclick = () => startReturn(false);
+$('returnAuto').onclick = () => startReturn(true);
+$('returnCancel').onclick = async () => { await send({type: 'cancelReturn'}); await refreshReturns(); };
+$('returnSubmit').onclick = async () => {
+  $('returnSubmit').disabled = true;
+  try { await send({type: 'returnSignature', signature: $('returnSignature').value}); $('returnSignature').value = ''; await refreshReturns(); }
+  catch (e) { $('returnError').textContent = e.message; $('returnSubmit').disabled = false; }
+};
+$('returnExcel').onclick = () => XLSX.writeFile(resultWorkbook(returnRows, true), 'Return-kiz-results.xlsx');
+$('returnJson').onclick = () => {
+  const rows = returnRows.map(({expirationDate, article, unit, status, returnDocument, ...row}) => ({...row, 'Срок годности': expirationDate, 'Артикул': article, 'Статус': status, 'Единица измерений': unit, '№Документа на возврат': returnDocument}));
+  const url = URL.createObjectURL(new Blob([JSON.stringify(rows, null, 2)], {type: 'application/json'}));
+  const a = document.createElement('a'); a.href = url; a.download = 'Return-kiz-results.json'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+setInterval(() => { if (returning) void refreshReturns(); }, 1000);
+void refreshReturns();
