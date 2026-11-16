@@ -43,7 +43,7 @@ test('return worker batches, reuses query token, persists IDs, blocks duplicates
   assert.equal(request.headers.Authorization, 'Bearer previous-query-token');
   const body = JSON.parse(request.body);
   assert.equal(body.type, 'LP_RETURN'); assert.equal(body.document_format, 'MANUAL');
-  assert.deepEqual(JSON.parse(Buffer.from(body.product_document, 'base64')), {trade_participant_inn: RETURN_INN, return_type: 'OWN_USE_RETURN', products_list: rows.slice(0, RETURN_BATCH_SIZE).map(row => ({ki: row.cis}))});
+  assert.deepEqual(JSON.parse(Buffer.from(body.product_document, 'base64')), {trade_participant_inn: RETURN_INN, return_type: 'REMOTE_SALE_RETURN', paid: false, products_list: rows.slice(0, RETURN_BATCH_SIZE).map(row => ({ki: row.cis}))});
   assert.equal(local.returnHistory.length, RETURN_BATCH_SIZE);
   fail = true;
   assert.equal((await send({type: 'returnSignature', signature: 'A'.repeat(100)})).ok, false);
