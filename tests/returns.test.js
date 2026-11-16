@@ -35,6 +35,7 @@ test('return worker batches, reuses query token, persists IDs, blocks duplicates
   local.auth = {token: 'different-token', expiresAt: Date.now() + 3600000};
   const rows = Array.from({length: RETURN_BATCH_SIZE + 1}, (_, i) => row(i, '01.01.2099'));
   assert.equal((await send({type: 'beginReturn', rows, detached: true})).ok, true);
+  assert.equal((await send({type: 'clearReturnHistory'})).ok, false);
   const signer = {url: 'https://cryptopro.ru/sites/default/files/products/cades/demopage/cades_bes_sample.html', tab: {id: tabs.at(-1).id}};
   assert.equal((await send({type: 'challenge'}, signer)).value.detached, true);
   assert.equal((await send({type: 'signature', signature: 'A'.repeat(100)}, {...signer, tab: {id: 999}})).ok, false);
@@ -55,5 +56,8 @@ test('return worker batches, reuses query token, persists IDs, blocks duplicates
   assert.equal((await send({type: 'returnSignature', signature: 'A'.repeat(100)})).ok, true);
   assert.equal((await send({type: 'returnStatus'})).value.state, 'complete');
   assert.equal(local.returnHistory.length, RETURN_BATCH_SIZE + 1);
+  assert.equal((await send({type: 'clearReturnHistory'})).ok, true);
+  assert.deepEqual((await send({type: 'returnStatus'})).value.rows, []);
+  assert.equal(Object.keys(local.returnDocuments).length, RETURN_BATCH_SIZE + 1);
   assert.equal((await send({type: 'beginReturn', rows})).error, 'Товаров на возврат нету');
 });

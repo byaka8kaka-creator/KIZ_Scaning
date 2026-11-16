@@ -451,5 +451,15 @@ try {
   assert.equal(await page.locator('#file').isDisabled(), true);
   assert.equal(await page.locator('#run').isDisabled(), true);
   assert.equal(await page.locator('#progress').innerText(), 'Пока нет результатов.');
+  await page.locator('#returnClear').click();
+  await page.waitForFunction(() => document.querySelectorAll('#returnResults tr').length === 0);
+  assert.deepEqual(stores.local.returnHistory, []);
+  assert.equal(stores.local.returnDocuments[code], documentId);
+  assert.equal(await page.locator('#returnExcel').isDisabled(), true);
+  assert.equal(await page.locator('#returnJson').isDisabled(), true);
+  await page.reload();
+  await page.locator('#returnStatus').filter({hasText: 'Пока нет возвратов.'}).waitFor();
+  assert.equal(await page.locator('#returnResults tr').count(), 0);
+
   console.log('PASS: real Chromium UI + background logic with mocked Chrome APIs/HTTP: XLS/XLSX, signing payload, token reuse/expiry, 403 retention, 401 reset, Excel export, sender validation, CryptoPro DOM bridge (fixture).');
 } finally { await browser.close(); }

@@ -210,6 +210,13 @@ async function handle(message, sender) {
       return {};
     }
     case 'returnStatus': return returnState();
+    case 'clearReturnHistory': {
+      const {returnJob} = await challengeStorage.get('returnJob');
+      if (returnStarting || returnSubmission || ['signing', 'submitting'].includes(returnJob?.state)) throw new Error('Дождитесь завершения или остановите возврат перед очисткой.');
+      await chrome.storage.local.set({returnHistory: []});
+      await challengeStorage.remove('returnJob');
+      return returnState();
+    }
     case 'beginReturn': return beginReturn(message);
     case 'returnSignature': return submitReturn(message.signature);
     case 'cancelReturn': {
@@ -251,7 +258,7 @@ function exclusive(fn) {
 }
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
   const started = Date.now();
-  const operation = ['status', 'begin', 'signature', 'query', 'challenge', 'diagnostic', 'clearLogs', 'autoFailure', 'returnStatus', 'beginReturn', 'returnSignature', 'cancelReturn'].includes(message?.type) ? message.type : 'unknown';
+  const operation = ['status', 'begin', 'signature', 'query', 'challenge', 'diagnostic', 'clearLogs', 'autoFailure', 'returnStatus', 'beginReturn', 'returnSignature', 'cancelReturn', 'clearReturnHistory'].includes(message?.type) ? message.type : 'unknown';
   initialization.then(() => handle(message, sender)).then(async value => {
     if (!['status', 'returnStatus', 'diagnostic', 'clearLogs'].includes(operation)) await record('operation.completed', {operation, durationMs: Date.now() - started, count: Array.isArray(value) ? value.length : 0});
     reply({ok: true, value});

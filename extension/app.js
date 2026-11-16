@@ -393,6 +393,7 @@ $('returnDetached').onchange = () => chrome.storage.local.set({returnDetached: $
 function returnControls() {
   for (const id of ['returnStart', 'returnAuto', 'returnDetached']) $(id).disabled = returning;
   $('returnCancel').disabled = !returning;
+  $('returnClear').disabled = returning || !returnRows.length;
   $('returnExcel').disabled = !returnRows.length || !excelAvailable();
   $('returnJson').disabled = !returnRows.length;
 }
@@ -447,3 +448,20 @@ $('returnJson').onclick = () => {
 };
 setInterval(() => { if (returning) void refreshReturns(); }, 1000);
 void refreshReturns();
+
+$('returnClear').onclick = async () => {
+  if (returning) return;
+  $('returnClear').disabled = true;
+  try {
+    await send({type: 'clearReturnHistory'});
+    returnRows = [];
+    $('returnResults').replaceChildren();
+    $('returnData').value = '';
+    $('returnSignature').value = '';
+    $('returnSubmit').disabled = true;
+    $('returnStatus').textContent = 'Пока нет возвратов.';
+    $('returnError').textContent = '';
+    $('returnArchiveStatus').textContent = '';
+  } catch (e) { $('returnError').textContent = e.message; }
+  finally { returnControls(); }
+};

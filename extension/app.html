@@ -15,6 +15,7 @@
 <section><div class="resultHeading"><h2>4. Возврат КИЗ в оборот</h2><div><button id="returnExcel" disabled class="secondary">Скачать Excel</button> <button id="returnJson" disabled class="secondary">Скачать JSON</button></div></div>
 <p class="hint">Возвращаются КИЗ со статусом RETIRED и сроком годности позже сегодняшней даты компьютера. Уже отправленные КИЗ пропускаются. Документы создаются последовательно пакетами.</p>
 <label><input type="checkbox" id="returnDetached"> Откреплённая подпись</label>
+<button id="returnClear" class="secondary" disabled>Очистить данные</button>
 <button id="returnStart">Вернуть КИЗ в оборот</button> <button id="returnAuto" class="secondary">Вернуть автоматически через КриптоПро</button> <button id="returnCancel" disabled class="secondary">Остановить возврат</button>
 <details><summary>Подписать документ возврата вручную</summary><p>JSON текущего пакета для подписи. Передавайте подпись именно этих данных.</p><textarea id="returnData" readonly aria-label="JSON документа возврата"></textarea><textarea id="returnSignature" aria-label="Подпись документа возврата Base64" placeholder="Подпись Base64"></textarea><button id="returnSubmit" disabled>Отправить подпись документа</button></details>
 <p id="returnStatus" role="status">Пока нет возвратов.</p><p id="returnArchiveStatus" role="status"></p><pre id="returnError" role="alert"></pre>
