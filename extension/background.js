@@ -213,7 +213,7 @@ async function handle(message, sender) {
     case 'clearReturnHistory': {
       const {returnJob} = await challengeStorage.get('returnJob');
       if (returnStarting || returnSubmission || ['signing', 'submitting'].includes(returnJob?.state)) throw new Error('Дождитесь завершения или остановите возврат перед очисткой.');
-      await chrome.storage.local.set({returnHistory: []});
+      await chrome.storage.local.set({returnHistory: [], returnDocuments: {}});
       await challengeStorage.remove('returnJob');
       return returnState();
     }

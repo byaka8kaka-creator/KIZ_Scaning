@@ -427,6 +427,18 @@ try {
   }
   await page.locator('#returnStart').click();
   await page.locator('#returnError').filter({hasText: 'Товаров на возврат нету'}).waitFor();
+  await page.locator('#returnClear').click();
+  await page.waitForFunction(() => document.querySelectorAll('#returnResults tr').length === 0);
+  assert.deepEqual(stores.local.returnDocuments, {});
+  assert.equal(await page.locator('#results tr').count(), 1);
+  await page.locator('#returnStart').click();
+  await page.locator('#returnStatus').filter({hasText: 'Подпишите'}).waitFor();
+  await page.getByText('Подписать документ возврата вручную', {exact: true}).click();
+  assert.equal(JSON.parse(await page.locator('#returnData').inputValue()).products_list[0].ki, code);
+  await page.locator('#returnSignature').fill('E'.repeat(100));
+  await page.locator('#returnSubmit').click();
+  await page.locator('#returnStatus').filter({hasText: 'Возврат завершён'}).waitFor();
+  assert.equal(await page.locator('#returnResults tr td').last().textContent(), documentId);
   const logPromise = page.waitForEvent('download');
   await page.locator('#downloadLog').click();
   const logDownload = await logPromise;
@@ -454,7 +466,7 @@ try {
   await page.locator('#returnClear').click();
   await page.waitForFunction(() => document.querySelectorAll('#returnResults tr').length === 0);
   assert.deepEqual(stores.local.returnHistory, []);
-  assert.equal(stores.local.returnDocuments[code], documentId);
+  assert.deepEqual(stores.local.returnDocuments, {});
   assert.equal(await page.locator('#returnExcel').isDisabled(), true);
   assert.equal(await page.locator('#returnJson').isDisabled(), true);
   await page.reload();

@@ -56,8 +56,12 @@ test('return worker batches, reuses query token, persists IDs, blocks duplicates
   assert.equal((await send({type: 'returnSignature', signature: 'A'.repeat(100)})).ok, true);
   assert.equal((await send({type: 'returnStatus'})).value.state, 'complete');
   assert.equal(local.returnHistory.length, RETURN_BATCH_SIZE + 1);
+  assert.equal((await send({type: 'beginReturn', rows})).error, 'Товаров на возврат нету');
   assert.equal((await send({type: 'clearReturnHistory'})).ok, true);
   assert.deepEqual((await send({type: 'returnStatus'})).value.rows, []);
-  assert.equal(Object.keys(local.returnDocuments).length, RETURN_BATCH_SIZE + 1);
-  assert.equal((await send({type: 'beginReturn', rows})).error, 'Товаров на возврат нету');
+  assert.deepEqual(local.returnDocuments, {});
+  assert.equal(session.returnJob, undefined);
+  assert.equal((await send({type: 'beginReturn', rows: [rows[0]]})).ok, true);
+  assert.equal((await send({type: 'returnSignature', signature: 'A'.repeat(100)})).ok, true);
+  assert.equal(local.returnHistory[0].cis, rows[0].cis);
 });
