@@ -14,7 +14,7 @@ export function eligibleReturns(rows, documents = {}, now = new Date()) {
   });
 }
 export function returnDocument(rows) {
-  return JSON.stringify({trade_participant_inn: RETURN_INN, return_type: 'OWN_USE_RETURN', products_list: rows.map(row => ({ki: row.cis}))});
+  return JSON.stringify({trade_participant_inn: RETURN_INN, return_type: 'REMOTE_SALE_RETURN', products_list: rows.map(row => ({ki: row.cis}))});
 }
 export function documentBase64(data) {
   return btoa(Array.from(new TextEncoder().encode(data), byte => String.fromCharCode(byte)).join(''));
