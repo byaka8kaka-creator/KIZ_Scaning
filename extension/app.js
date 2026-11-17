@@ -431,6 +431,7 @@ $('barcodeForm').onsubmit = event => {
   refreshBarcodeResults(); archiveBarcodeResults();
   $('barcodeStatus').textContent = `ШК сохранён. Добавлено товаров без КИЗ: ${barcodeRows.length}. Можно сканировать следующий.`;
   $('barcodeComment').value = '';
+  date.value = '';
   input.value = ''; input.focus();
 };
 $('clearBarcodes').onclick = () => {
