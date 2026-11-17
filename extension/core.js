@@ -40,7 +40,10 @@ const ruKeys = 'ё1234567890-йцукенгшщзхъфывапролджэяч�
 const enKeys = "`1234567890-qwertyuiop[]asdfghjkl;'zxcvbnm,.";
 export function correctKeyboardLayout(value) {
   // Translate punctuation only when this scan contains Russian letters.
-  if (/[ёа-яЁА-Я]/.test(value)) value = value.replace(/[?,]/g, char => char === '?' ? '&' : '?');
+  if (/[ёа-яЁА-Я]/.test(value)) {
+    const punctuation = {'?': '&', ',': '?', '.': '/'};
+    value = value.replace(/[?,.]/g, char => punctuation[char]);
+  }
   return value.replace(/[ёа-яЁА-Я]/g, char => {
     const index = ruKeys.indexOf(char.toLowerCase());
     const replacement = enKeys[index];

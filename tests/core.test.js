@@ -94,6 +94,18 @@ test('scanner commas change only in rows containing Russian letters', () => {
   assert.deepEqual(parsed.codes, [expected, latin]);
 });
 
+test('Russian period maps to slash before letter conversion; Latin periods stay unchanged', () => {
+  const raw = '0104650096352543215.двЦ9';
+  const full = '0104650096352543215/ldW9';
+  assert.equal(correctKeyboardLayout(raw), full);
+  assert.equal(correctKeyboardLayout(full), full);
+  assert.equal(correctKeyboardLayout('0104650096352543215.ldW9'), '0104650096352543215.ldW9');
+  assert.equal(correctKeyboardLayout('ю.б,?\u001d'), './,?&\u001d');
+  const parsed = extractCodes([[raw], [full], ['0104650096352543215.ldW9']], 0, false);
+  assert.deepEqual(parsed.fullCodes, [full, '0104650096352543215.ldW9']);
+  assert.deepEqual(parsed.codes, [full.slice(0, 24), '0104650096352543215.ldW9'.slice(0, 24)]);
+});
+
 test('API product status supports nested, flat and absent values', () => {
   const rows = parseResults([{cisInfo: {cis: 'a', status: 'INTRODUCED'}}, {cis: 'b', status: 'RETIRED'}, {cisInfo: {cis: 'c'}}], ['a', 'b', 'c', 'd']);
   assert.deepEqual(rows.map(row => row.status), ['INTRODUCED', 'RETIRED', '', '']);
