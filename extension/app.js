@@ -5,7 +5,8 @@ import {Archive} from './archive.js';
 const archive = new Archive();
 let archiveReady = archive.restore().catch(() => false);
 const manualComments = new Map();
-let recentComments = [];
+let recentComments = [], pinnedComments = [];
+let pinnedCommentsQueue = Promise.resolve();
 const $ = id => document.getElementById(id);
 let workbook, rows = [], codes = [], results = [], busy = false, stopping = false, importing = false;
 let fileCodes = [];
@@ -270,6 +271,7 @@ $('scanForm').onsubmit = event => {
     $('scanStatus').textContent = `КИЗ сохранён. Вручную добавлено: ${manualCodes.size}. Можно сканировать следующий.`;
     diagnostic('scan.saved', {count: manualCodes.size});
   }
+  $('scanComment').value = '';
   input.value = ''; input.focus();
 };
 $('clearScans').onclick = () => {
@@ -280,9 +282,29 @@ $('clearScans').onclick = () => {
 };
 
 function updateCommentHistory() {
+  const comments = [...new Set([...pinnedComments, ...recentComments])];
   $('commentHistory').replaceChildren();
-  for (const text of recentComments) { const option = document.createElement('option'); option.value = text; $('commentHistory').append(option); }
+  for (const text of comments) { const option = document.createElement('option'); option.value = text; $('commentHistory').append(option); }
+  for (const id of ['scanQuickComments', 'barcodeQuickComments']) {
+    $(id).replaceChildren();
+    for (const text of comments) {
+      const label = document.createElement('label'), checkbox = document.createElement('input');
+      checkbox.type = 'checkbox'; checkbox.value = text; checkbox.checked = pinnedComments.includes(text);
+      checkbox.onchange = () => {
+        pinnedComments = checkbox.checked ? [...new Set([...pinnedComments, text])] : pinnedComments.filter(item => item !== text);
+        const saved = [...pinnedComments];
+        updateCommentHistory();
+        pinnedCommentsQueue = pinnedCommentsQueue.catch(() => {}).then(() => chrome.storage.local.set({pinnedScanComments: saved}));
+        pinnedCommentsQueue.catch(error);
+      };
+      label.append(checkbox, document.createTextNode(text)); $(id).append(label);
+    }
+  }
 }
+chrome.storage.local.get('pinnedScanComments').then(({pinnedScanComments}) => {
+  pinnedComments = Array.isArray(pinnedScanComments) ? [...new Set(pinnedScanComments.filter(value => typeof value === 'string' && value.trim()))] : [];
+  updateCommentHistory();
+}).catch(error);
 chrome.storage.local.get('recentScanComments').then(({recentScanComments}) => {
   recentComments = Array.isArray(recentScanComments) ? [...new Set(recentScanComments.filter(value => typeof value === 'string' && value.trim()))].slice(0, 5) : [];
   updateCommentHistory();
@@ -392,6 +414,9 @@ $('barcodeForm').onsubmit = event => {
     input.select(); input.focus(); return;
   }
   const date = $('barcodeDate');
+  if (!date.value && !date.validity.badInput) {
+    $('barcodeStatus').textContent = 'Срок годности не введён.'; date.focus(); return;
+  }
   if (date.validity.badInput || (date.value && !/^\d{4}-\d{2}-\d{2}$/.test(date.value))) {
     $('barcodeStatus').textContent = 'Введите корректный срок годности.'; date.focus(); return;
   }
@@ -405,6 +430,7 @@ $('barcodeForm').onsubmit = event => {
   }
   refreshBarcodeResults(); archiveBarcodeResults();
   $('barcodeStatus').textContent = `ШК сохранён. Добавлено товаров без КИЗ: ${barcodeRows.length}. Можно сканировать следующий.`;
+  $('barcodeComment').value = '';
   input.value = ''; input.focus();
 };
 $('clearBarcodes').onclick = () => {

@@ -87,6 +87,8 @@ try {
   assert.equal(stores.local.recentScanComments[0], 'Партия А');
   assert.equal(await page.locator('#scanInput').inputValue(), '');
   assert.equal(await page.locator('#run').isEnabled(), true);
+  assert.equal(await page.locator('#scanComment').inputValue(), '');
+  await page.locator('#scanComment').fill('Партия А');
   await page.locator('#scanInput').fill('0104650096359269215?ш88И\u001d931СКн');
   await page.locator('#scanInput').press('Enter');
   await page.getByText('Этот КИЗ уже добавлен.', {exact: false}).waitFor();
@@ -216,11 +218,18 @@ try {
     assert.equal(await page.locator('#results tr').count(), 2);
     assert.equal(JSON.stringify(stores.local.recentScanComments), historyBefore);
   }
+  await page.locator('#barcodeInput').fill('1234567890123');
+  await page.locator('#barcodeInput').press('Enter');
+  assert.equal(await page.locator('#barcodeStatus').textContent(), 'Срок годности не введён.');
+  assert.equal(await page.locator('#barcodeComment').inputValue(), 'Без маркировки');
+  assert.equal(await page.locator('#results tr').count(), 2);
   for (const date of ['2028-02-29', '2029-03-01']) {
     await page.locator('#barcodeDate').fill(date);
     await page.locator('#barcodeInput').fill('1234567890123');
     await page.locator('#barcodeInput').press('Enter');
   }
+  assert.equal(await page.locator('#barcodeComment').inputValue(), '');
+  assert.equal(await page.locator('#barcodeStatus').evaluate(el => getComputedStyle(el).fontSize), await page.locator('#barcodeTitle').evaluate(el => getComputedStyle(el).fontSize));
   assert.equal(calls.length, beforeBarcodeCalls);
   assert.equal(await page.locator('#results tr').count(), 4);
   assert.deepEqual(await page.locator('#results tr').nth(2).locator('td').allTextContents(),
@@ -375,6 +384,7 @@ try {
   // Barcode-only scanning works with expired authorization; clearing CIS preserves barcodes.
   const noAuthCalls = calls.length;
   await page.locator('#scanBarcode').click();
+  await page.locator('#barcodeDate').fill('2029-01-01');
   await page.locator('#barcodeInput').fill('0000000000001');
   await page.locator('#barcodeInput').press('Enter');
   await page.locator('#closeBarcode').click();
@@ -516,5 +526,28 @@ try {
   await page.locator('#returnStatus').filter({hasText: 'Пока нет возвратов.'}).waitFor();
   assert.equal(await page.locator('#returnResults tr').count(), 0);
 
+  // Pinned quick comments survive more than five new comments and reloads.
+  await page.locator('#scan').click();
+  await page.locator('#scanComment').fill('Закреплённый комментарий');
+  await page.locator('#scanInput').fill('P'.repeat(24));
+  await page.locator('#scanInput').press('Enter');
+  assert.equal(await page.locator('#scanComment').inputValue(), '');
+  await page.locator('#scanQuickComments').locator('..').locator('summary').click();
+  await page.locator('#scanQuickComments input[value="Закреплённый комментарий"]').check();
+  for (let i = 0; i < 6; i++) {
+    await page.locator('#scanComment').fill('Новый ' + i);
+    await page.locator('#scanInput').fill(String(i).repeat(24));
+    await page.locator('#scanInput').press('Enter');
+  }
+  assert.equal(await page.locator('#commentHistory option[value="Закреплённый комментарий"]').count(), 1);
+  assert.equal(await page.locator('#commentHistory option').count(), 6);
+  await page.locator('#closeScan').click();
+  await page.locator('#scanBarcode').click();
+  await page.locator('#barcodeQuickComments').locator('..').locator('summary').click();
+  assert.equal(await page.locator('#barcodeQuickComments input[value="Закреплённый комментарий"]').isChecked(), true);
+  await page.locator('#closeBarcode').click();
+  await page.reload();
+  await page.waitForFunction(() => document.querySelector('#commentHistory option[value="Закреплённый комментарий"]'));
+  assert.deepEqual(stores.local.pinnedScanComments, ['Закреплённый комментарий']);
   console.log('PASS: real Chromium UI + background logic with mocked Chrome APIs/HTTP: XLS/XLSX, signing payload, token reuse/expiry, 403 retention, 401 reset, Excel export, sender validation, CryptoPro DOM bridge (fixture).');
 } finally { await browser.close(); }
