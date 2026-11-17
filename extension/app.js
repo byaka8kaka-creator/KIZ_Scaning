@@ -324,7 +324,7 @@ $('chooseArchive').onclick = async () => {
 $('clearData').onclick = () => {
   if (busy || importing || !confirm('Вы уверены что хотите очистить список отсканированных и загруженных КИЗ')) return;
   barcodeRows.length = 0;
-  $('barcodeInput').value = ''; $('barcodeComment').value = ''; $('barcodeDate').value = ''; $('barcodeStatus').textContent = '';
+  $('barcodeInput').value = ''; $('barcodeComment').value = ''; clearBarcodeDate(); $('barcodeStatus').textContent = '';
   manualCodes.clear(); manualComments.clear(); fileCodes = []; rows = []; workbook = undefined;
   $('file').value = ''; $('sheet').replaceChildren(); $('column').replaceChildren();
   $('importErrors').textContent = ''; $('fileStatus').textContent = 'Файл не выбран.';
@@ -400,6 +400,30 @@ function archiveBarcodeResults() {
     }
   });
 }
+const barcodeMonths = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
+function dateOptions(id, placeholder, values) {
+  const select = $(id);
+  select.replaceChildren(new Option(placeholder, ''));
+  for (const [value, label] of values) select.add(new Option(label, String(value)));
+}
+function updateBarcodeDays() {
+  const previous = $('barcodeDay').value;
+  const month = Number($('barcodeMonth').value), year = Number($('barcodeYear').value);
+  const count = month ? new Date(year || 2000, month, 0).getDate() : 31;
+  dateOptions('barcodeDay', 'День', Array.from({length: count}, (_, i) => [i + 1, String(i + 1).padStart(2, '0')]));
+  $('barcodeDay').value = Number(previous) <= count ? previous : '';
+}
+function clearBarcodeDate() {
+  for (const id of ['barcodeDay', 'barcodeMonth', 'barcodeYear']) $(id).value = '';
+  updateBarcodeDays();
+}
+dateOptions('barcodeMonth', 'Месяц', barcodeMonths.map((name, i) => [i + 1, `${String(i + 1).padStart(2, '0')} — ${name}`]));
+const currentYear = new Date().getFullYear();
+const expiryYears = [...Array.from({length: 101}, (_, i) => currentYear + i), ...Array.from({length: Math.max(0, currentYear - 1900)}, (_, i) => currentYear - 1 - i)];
+dateOptions('barcodeYear', 'Год', expiryYears.map(year => [year, year]));
+updateBarcodeDays();
+$('barcodeMonth').onchange = updateBarcodeDays;
+$('barcodeYear').onchange = updateBarcodeDays;
 $('scanBarcode').onclick = () => {
   $('barcodeStatus').textContent = ''; $('barcodeInput').value = '';
   $('barcodeDialog').showModal(); $('barcodeInput').focus();
@@ -413,16 +437,15 @@ $('barcodeForm').onsubmit = event => {
     $('barcodeStatus').textContent = 'Отсканирован не ШК';
     input.select(); input.focus(); return;
   }
-  const date = $('barcodeDate');
-  if (!date.value && !date.validity.badInput) {
-    $('barcodeStatus').textContent = 'Срок годности не введён.'; date.focus(); return;
+  const missingDatePart = ['barcodeDay', 'barcodeMonth', 'barcodeYear'].find(id => !$(id).value);
+  if (missingDatePart) {
+    $('barcodeStatus').textContent = 'Срок годности не введён. Выберите день, месяц и год.';
+    $(missingDatePart).focus(); return;
   }
-  if (date.validity.badInput || (date.value && !/^\d{4}-\d{2}-\d{2}$/.test(date.value))) {
-    $('barcodeStatus').textContent = 'Введите корректный срок годности.'; date.focus(); return;
-  }
+  const date = `${$('barcodeYear').value}-${$('barcodeMonth').value.padStart(2, '0')}-${$('barcodeDay').value.padStart(2, '0')}`;
   const comment = $('barcodeComment').value.trim();
   barcodeRows.push({cis: '', cis_full: '', gtin: '0' + input.value,
-    expirationDate: formatExpirationDate(date.value), comment, status: '', error: ''});
+    expirationDate: formatExpirationDate(date), comment, status: '', error: ''});
   if (comment) {
     recentComments = [comment, ...recentComments.filter(item => item !== comment)].slice(0, 5);
     updateCommentHistory();
@@ -431,7 +454,7 @@ $('barcodeForm').onsubmit = event => {
   refreshBarcodeResults(); archiveBarcodeResults();
   $('barcodeStatus').textContent = `ШК сохранён. Добавлено товаров без КИЗ: ${barcodeRows.length}. Можно сканировать следующий.`;
   $('barcodeComment').value = '';
-  date.value = '';
+  clearBarcodeDate();
   input.value = ''; input.focus();
 };
 $('clearBarcodes').onclick = () => {

@@ -220,13 +220,23 @@ try {
   }
   await page.locator('#barcodeInput').fill('1234567890123');
   await page.locator('#barcodeInput').press('Enter');
-  assert.equal(await page.locator('#barcodeStatus').textContent(), 'Срок годности не введён.');
+  assert.equal(await page.locator('#barcodeStatus').textContent(), 'Срок годности не введён. Выберите день, месяц и год.');
   assert.equal(await page.locator('#barcodeComment').inputValue(), 'Без маркировки');
   assert.equal(await page.locator('#results tr').count(), 2);
+  await page.locator('#barcodeMonth').selectOption('2');
+  await page.locator('#barcodeYear').selectOption('2028');
+  await page.locator('#barcodeDay').selectOption('29');
+  await page.locator('#barcodeYear').selectOption('2029');
+  assert.equal(await page.locator('#barcodeDay option[value="29"]').count(), 0);
+  assert.equal(await page.locator('#barcodeDay').inputValue(), '');
   for (const date of ['2028-02-29', '2029-03-01']) {
-    await page.locator('#barcodeDate').fill(date);
+    const [year, month, day] = date.split('-').map(Number);
+    await page.locator('#barcodeMonth').selectOption(String(month));
+    await page.locator('#barcodeYear').selectOption(String(year));
+    await page.locator('#barcodeDay').selectOption(String(day));
     await page.locator('#barcodeInput').fill('1234567890123');
     await page.locator('#barcodeInput').press('Enter');
+    for (const part of ['Day', 'Month', 'Year']) assert.equal(await page.locator('#barcode' + part).inputValue(), '');
   }
   assert.equal(await page.locator('#barcodeComment').inputValue(), '');
   assert.equal(await page.locator('#barcodeStatus').evaluate(el => getComputedStyle(el).fontSize), await page.locator('#barcodeTitle').evaluate(el => getComputedStyle(el).fontSize));
@@ -384,7 +394,9 @@ try {
   // Barcode-only scanning works with expired authorization; clearing CIS preserves barcodes.
   const noAuthCalls = calls.length;
   await page.locator('#scanBarcode').click();
-  await page.locator('#barcodeDate').fill('2029-01-01');
+  await page.locator('#barcodeMonth').selectOption('1');
+  await page.locator('#barcodeYear').selectOption('2029');
+  await page.locator('#barcodeDay').selectOption('1');
   await page.locator('#barcodeInput').fill('0000000000001');
   await page.locator('#barcodeInput').press('Enter');
   await page.locator('#closeBarcode').click();
