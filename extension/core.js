@@ -1,3 +1,4 @@
+import {apiFields} from './export-fields.js';
 import {record} from './diagnostics.js';
 export const TOKEN_TTL = 10 * 60 * 60 * 1000;
 export const API = 'https://markirovka.crpt.ru/api/v3/true-api';
@@ -84,12 +85,11 @@ export function parseResults(payload, requested) {
     const errorCode = item?.errorCode ?? info?.errorCode;
     byCis.set(cis, {
       cis, status: info?.status ?? item?.status ?? '', gtin: info.gtin ?? '', expirationDate: formatExpirationDate(info.expirationDate),
-      ownerName: String(info?.ownerName ?? item?.ownerName ?? ''),
-      ownerInn: String(info?.ownerInn ?? item?.ownerInn ?? ''),
+      ...apiFields(info, item),
       error: errorCode ? `Ошибка API: ${errorCode}` : (item?.errorMessage ?? '')
     });
   }
-  return requested.map(cis => byCis.get(cis) ?? {cis, status: '', gtin: '', expirationDate: '', ownerName: '', ownerInn: '', error: 'Нет данных в ответе API'});
+  return requested.map(cis => byCis.get(cis) ?? {cis, status: '', gtin: '', expirationDate: '', ...apiFields(null, null), error: 'Нет данных в ответе API'});
 }
 
 // Keep the calendar date supplied by API; timezone conversion must not shift the day.

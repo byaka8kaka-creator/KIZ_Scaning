@@ -1,3 +1,4 @@
+import {OPTIONAL_FIELDS, DEFAULT_OPTIONAL_FIELDS, selectedFields, exportFields, projectExport, jsonExport} from './export-fields.js';
 import {extractCodes, excelExpirationDate, correctKeyboardLayout, attachFullCodes, formatExpirationDate} from './core.js';
 import {parseCatalog, articleFor, unitFor} from './catalog.js';
 import {Archive} from './archive.js';
@@ -9,7 +10,8 @@ const $ = id => document.getElementById(id);
 let workbook, rows = [], codes = [], results = [], busy = false, stopping = false, importing = false;
 let fileCodes = [];
 let catalog = new Map(), catalogLoadedAt = null;
-let catalogLoading = true;
+let catalogLoading = true, exportSettingsLoading = true;
+let optionalFields = [...DEFAULT_OPTIONAL_FIELDS];
 const manualCodes = new Set();
 const barcodeRows = [];
 let barcodeArchiveQueue = Promise.resolve();
@@ -24,16 +26,16 @@ window.addEventListener('unhandledrejection', () => diagnostic('ui.unhandled_err
 function error(e) { diagnostic('ui.error', {errorKind: e?.name || 'Error'}); $('error').textContent = e?.message || String(e); }
 function excelAvailable() { return typeof globalThis.XLSX?.read === 'function'; }
 function controls() {
-  $('run').disabled = busy || importing || catalogLoading || !codes.length;
+  $('run').disabled = exportSettingsLoading || busy || importing || catalogLoading || !codes.length;
   for (const id of ['file', 'header']) $(id).disabled = busy || importing || catalogLoading || !excelAvailable();
   for (const id of ['sheet', 'column']) $(id).disabled = busy || importing || catalogLoading || !workbook;
-  for (const id of ['export', 'json']) $(id).disabled = !results.length || catalogLoading;
+  for (const id of ['export', 'json']) $(id).disabled = !results.length || catalogLoading || exportSettingsLoading;
   $('loadCatalog').disabled = busy || importing || catalogLoading || !excelAvailable();
   $('scan').disabled = busy || importing || catalogLoading;
   $('scanBarcode').disabled = busy || importing || catalogLoading;
   $('clearData').disabled = busy || importing || catalogLoading;
   $('chooseArchive').disabled = busy || importing || catalogLoading;
-  $('export').disabled = !results.length || catalogLoading || !excelAvailable();
+  $('export').disabled = !results.length || catalogLoading || exportSettingsLoading || !excelAvailable();
   $('stop').disabled = !busy || stopping;
 }
 async function status() {
@@ -150,9 +152,36 @@ $('run').onclick = async () => {
   }
 };
 $('stop').onclick = () => { stopping = true; diagnostic('query.stopped'); controls(); };
+let exportSettingsQueue = Promise.resolve();
+function renderExportSettings() {
+  $('optionalFields').replaceChildren();
+  for (const field of OPTIONAL_FIELDS) {
+    const label = document.createElement('label'), checkbox = document.createElement('input');
+    checkbox.type = 'checkbox'; checkbox.value = field; checkbox.checked = optionalFields.includes(field);
+    checkbox.onchange = () => {
+      optionalFields = [...$('optionalFields').querySelectorAll('input:checked')].map(input => input.value);
+      const snapshot = [...optionalFields];
+      $('exportSettingsStatus').textContent = 'Сохраняем…';
+      exportSettingsQueue = exportSettingsQueue.catch(() => {}).then(() => chrome.storage.local.set({optionalExportFields: snapshot}));
+      const pending = exportSettingsQueue;
+      pending.then(() => { if (pending === exportSettingsQueue) $('exportSettingsStatus').textContent = 'Настройки сохранены.'; }, () => { if (pending === exportSettingsQueue) $('exportSettingsStatus').textContent = 'Не удалось сохранить настройки. Повторите выбор.'; });
+    };
+    label.append(checkbox, document.createTextNode(field)); $('optionalFields').append(label);
+  }
+}
+$('exportSettings').disabled = true;
+chrome.storage.local.get('optionalExportFields').then(({optionalExportFields}) => {
+  optionalFields = selectedFields(optionalExportFields);
+}).catch(error).finally(() => {
+  exportSettingsLoading = false; renderExportSettings(); $('exportSettings').disabled = false; controls();
+});
+$('exportSettings').onclick = () => $('exportSettingsDialog').showModal();
+$('closeExportSettings').onclick = () => $('exportSettingsDialog').close();
 function resultWorkbook(exportRows = results, returning = false) {
   const book = XLSX.utils.book_new();
-  const sheet = XLSX.utils.json_to_sheet(exportRows, {header: ['cis', 'cis_full', 'gtin', 'expirationDate', 'comment', 'article', 'status', 'unit', 'error', 'ownerName', 'ownerInn', ...(returning ? ['returnDocument'] : [])]});
+  const optional = returning ? DEFAULT_OPTIONAL_FIELDS : optionalFields;
+  const fields = exportFields(optional, returning);
+  const sheet = XLSX.utils.json_to_sheet(projectExport(exportRows, optional, returning), {header: fields});
   exportRows.forEach((row, i) => {
     const serial = excelExpirationDate(row.expirationDate);
     if (serial !== null) sheet[XLSX.utils.encode_cell({r: i + 1, c: 3})] = {t: 'n', v: serial, z: 'dd"."mm"."yyyy'};
@@ -162,7 +191,7 @@ function resultWorkbook(exportRows = results, returning = false) {
   sheet.E1 = {t: 's', v: 'Комментарий'};
   sheet.H1 = {t: 's', v: 'Единица измерений'};
   sheet.G1 = {t: 's', v: 'Статус'};
-  if (returning) sheet.L1 = {t: 's', v: '№Документа на возврат'};
+  if (returning) sheet[XLSX.utils.encode_cell({r: 0, c: fields.indexOf('returnDocument')})] = {t: 's', v: '№Документа на возврат'};
   XLSX.utils.book_append_sheet(book, sheet, 'КИЗ'); return book;
 }
 $('export').onclick = () => {
@@ -171,7 +200,7 @@ $('export').onclick = () => {
 };
 $('json').onclick = () => {
   diagnostic('export.json', {count: results.length});
-  const url = URL.createObjectURL(new Blob([JSON.stringify(results.map(({expirationDate, article, unit = '', status = '', ...row}) => ({...row, 'Срок годности': expirationDate, 'Артикул': article, 'Единица измерений': unit, 'Статус': status})), null, 2)], {type: 'application/json'}));
+  const url = URL.createObjectURL(new Blob([JSON.stringify(jsonExport(results, optionalFields), null, 2)], {type: 'application/json'}));
   const a = document.createElement('a'); a.href = url; a.download = 'kiz-results.json'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
 status().catch(error);
@@ -442,7 +471,7 @@ $('returnSubmit').onclick = async () => {
 };
 $('returnExcel').onclick = () => XLSX.writeFile(resultWorkbook(returnRows, true), 'Return-kiz-results.xlsx');
 $('returnJson').onclick = () => {
-  const rows = returnRows.map(({expirationDate, article, unit, status, returnDocument, ...row}) => ({...row, 'Срок годности': expirationDate, 'Артикул': article, 'Статус': status, 'Единица измерений': unit, '№Документа на возврат': returnDocument}));
+  const rows = jsonExport(returnRows, DEFAULT_OPTIONAL_FIELDS, true);
   const url = URL.createObjectURL(new Blob([JSON.stringify(rows, null, 2)], {type: 'application/json'}));
   const a = document.createElement('a'); a.href = url; a.download = 'Return-kiz-results.json'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 };
