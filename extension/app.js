@@ -419,7 +419,7 @@ function clearBarcodeDate() {
 }
 dateOptions('barcodeMonth', 'Месяц', barcodeMonths.map((name, i) => [i + 1, `${String(i + 1).padStart(2, '0')} — ${name}`]));
 const currentYear = new Date().getFullYear();
-const expiryYears = [...Array.from({length: 101}, (_, i) => currentYear + i), ...Array.from({length: Math.max(0, currentYear - 1900)}, (_, i) => currentYear - 1 - i)];
+const expiryYears = Array.from({length: 7}, (_, i) => currentYear + i);
 dateOptions('barcodeYear', 'Год', expiryYears.map(year => [year, year]));
 updateBarcodeDays();
 $('barcodeMonth').onchange = updateBarcodeDays;
