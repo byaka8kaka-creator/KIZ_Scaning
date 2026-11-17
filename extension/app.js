@@ -152,7 +152,7 @@ $('run').onclick = async () => {
 $('stop').onclick = () => { stopping = true; diagnostic('query.stopped'); controls(); };
 function resultWorkbook(exportRows = results, returning = false) {
   const book = XLSX.utils.book_new();
-  const sheet = XLSX.utils.json_to_sheet(exportRows, {header: ['cis', 'cis_full', 'gtin', 'expirationDate', 'comment', 'article', 'status', 'unit', 'error', ...(returning ? ['returnDocument'] : [])]});
+  const sheet = XLSX.utils.json_to_sheet(exportRows, {header: ['cis', 'cis_full', 'gtin', 'expirationDate', 'comment', 'article', 'status', 'unit', 'error', 'ownerName', 'ownerInn', ...(returning ? ['returnDocument'] : [])]});
   exportRows.forEach((row, i) => {
     const serial = excelExpirationDate(row.expirationDate);
     if (serial !== null) sheet[XLSX.utils.encode_cell({r: i + 1, c: 3})] = {t: 'n', v: serial, z: 'dd"."mm"."yyyy'};
@@ -162,7 +162,7 @@ function resultWorkbook(exportRows = results, returning = false) {
   sheet.E1 = {t: 's', v: 'Комментарий'};
   sheet.H1 = {t: 's', v: 'Единица измерений'};
   sheet.G1 = {t: 's', v: 'Статус'};
-  if (returning) sheet.J1 = {t: 's', v: '№Документа на возврат'};
+  if (returning) sheet.L1 = {t: 's', v: '№Документа на возврат'};
   XLSX.utils.book_append_sheet(book, sheet, 'КИЗ'); return book;
 }
 $('export').onclick = () => {

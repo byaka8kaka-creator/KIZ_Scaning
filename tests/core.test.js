@@ -98,3 +98,15 @@ test('API product status supports nested, flat and absent values', () => {
   const rows = parseResults([{cisInfo: {cis: 'a', status: 'INTRODUCED'}}, {cis: 'b', status: 'RETIRED'}, {cisInfo: {cis: 'c'}}], ['a', 'b', 'c', 'd']);
   assert.deepEqual(rows.map(row => row.status), ['INTRODUCED', 'RETIRED', '', '']);
 });
+
+test('API owner fields survive nested and flat responses; absent values stay empty', () => {
+  const rows = parseResults([
+    {cisInfo: {cis: 'a', ownerName: 'ООО Владелец', ownerInn: '010501669800'}},
+    {cis: 'b', ownerName: 'ИП Владелец', ownerInn: '001234567890'},
+    {cisInfo: {cis: 'c'}},
+    {cisInfo: {cis: 'd'}, ownerName: 'Компания', ownerInn: '0001234567'}
+  ], ['a', 'b', 'c', 'd', 'missing']);
+  assert.deepEqual(rows.map(({ownerName, ownerInn}) => [ownerName, ownerInn]), [
+    ['ООО Владелец', '010501669800'], ['ИП Владелец', '001234567890'], ['', ''], ['Компания', '0001234567'], ['', '']
+  ]);
+});

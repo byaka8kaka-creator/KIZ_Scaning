@@ -29,7 +29,7 @@ globalThis.fetch = async (url, options) => {
   if (url.endsWith('/auth/simpleSignIn')) return new Response(JSON.stringify({token: 'test-token'}));
   if (url.includes('/lk/documents/create')) return new Response(JSON.stringify('438cac2c-fbb5-4ef5-8a51-dfdb0cfea2e1'));
   if (failStatus) { const status = failStatus; failStatus = 0; return new Response('', {status}); }
-  return new Response(JSON.stringify(JSON.parse(options.body).map(cis => ({cisInfo: {cis, gtin: '01234567890123', expirationDate: '2027-10-05T00:00:00.000Z', status: productStatus}}))));
+  return new Response(JSON.stringify(JSON.parse(options.body).map(cis => ({cisInfo: {cis, gtin: '01234567890123', expirationDate: '2027-10-05T00:00:00.000Z', status: productStatus, ownerName: 'ООО Владелец', ownerInn: '010501669800'}}))));
 };
 await import('../extension/background.js');
 const message = (data, sender = {url: 'https://kiz.test/app.html'}) => new Promise(resolve => listener(data, sender, resolve));
@@ -190,6 +190,15 @@ try {
   assert.equal(jsonRows[0]['Единица измерений'], 'упак');
   assert.equal('unit' in jsonRows[0], false);
   assert.equal(XLSX.utils.sheet_to_json(exported.Sheets['КИЗ'])[0]['Единица измерений'], 'упак');
+  assert.equal(jsonRows[0].ownerName, 'ООО Владелец');
+  assert.equal(jsonRows[0].ownerInn, '010501669800');
+  const ownerExport = XLSX.utils.sheet_to_json(exported.Sheets['КИЗ'])[0];
+  assert.equal(ownerExport.ownerName, 'ООО Владелец');
+  assert.equal(ownerExport.ownerInn, '010501669800');
+  assert.equal(archiveRows[0].ownerName, 'ООО Владелец');
+  assert.equal(archiveRows[0].ownerInn, '010501669800');
+  assert.equal(await page.locator('#results tr').first().locator('td').count(), 9);
+  assert.equal((await page.locator('#results').textContent()).includes('ООО Владелец'), false);
   assert.equal(jsonRows[0]['Статус'], 'INTRODUCED');
   assert.equal(XLSX.utils.sheet_to_json(exported.Sheets['КИЗ'])[0]['Статус'], 'INTRODUCED');
   assert.equal(archiveRows[0]['Статус'], 'INTRODUCED');
