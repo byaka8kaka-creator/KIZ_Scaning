@@ -21,8 +21,8 @@ export function playScanSound(result) {
         const start = context.currentTime + offset;
         oscillator.type = 'sine'; oscillator.frequency.value = frequency;
         gain.gain.setValueAtTime(0, start);
-        gain.gain.linearRampToValueAtTime(0.14, start + 0.015);
-        gain.gain.linearRampToValueAtTime(0, start + duration);
+        gain.gain.linearRampToValueAtTime(0.56, start + 0.015);
+        gain.gain.linearRampToValueAtTime(0.4, start + duration);
         oscillator.connect(gain); gain.connect(context.destination);
         oscillator.onended = () => { oscillator.disconnect(); gain.disconnect(); active = active.filter(item => item !== oscillator); };
         active.push(oscillator);
