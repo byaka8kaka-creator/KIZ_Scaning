@@ -55,7 +55,7 @@ try {
   });
   await page.route('https://kiz.test/**', async route => {
     const path = new URL(route.request().url()).pathname.slice(1);
-    if (!['app.html', 'app.css', 'app.js', 'core.js', 'export-fields.js', 'diagnostics.js', 'archive.js', 'catalog.js', 'returns.js', 'vendor/xlsx.full.min.js'].includes(path)) return route.abort();
+    if (!['app.html', 'app.css', 'app.js', 'scan-sound.js', 'core.js', 'export-fields.js', 'diagnostics.js', 'archive.js', 'catalog.js', 'returns.js', 'vendor/xlsx.full.min.js'].includes(path)) return route.abort();
     await route.fulfill({body: await readFile(new URL('../' + (process.env.KIZ_TEST_SOURCE || 'dist') + '/' + path, import.meta.url)), contentType: path.endsWith('.js') ? 'text/javascript' : path.endsWith('.css') ? 'text/css' : 'text/html'});
   });
   await page.goto('https://kiz.test/app.html');

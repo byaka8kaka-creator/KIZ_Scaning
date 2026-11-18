@@ -1,3 +1,4 @@
+import {playScanSound} from './scan-sound.js';
 import {OPTIONAL_FIELDS, DEFAULT_OPTIONAL_FIELDS, selectedFields, exportFields, projectExport, jsonExport} from './export-fields.js';
 import {extractCodes, excelExpirationDate, correctKeyboardLayout, attachFullCodes, formatExpirationDate} from './core.js';
 import {parseCatalog, articleFor, unitFor} from './catalog.js';
@@ -248,6 +249,7 @@ $('scanForm').onsubmit = event => {
   const value = correctKeyboardLayout(input.value.trim());
   if (value.length < 24) {
     $('scanStatus').textContent = 'Отсканирован не КИЗ: введено менее 24 символов. Код не сохранён.';
+    playScanSound('error');
     diagnostic('scan.rejected'); input.select(); input.focus(); return;
   }
   const comment = $('scanComment').value.trim();
@@ -265,10 +267,12 @@ $('scanForm').onsubmit = event => {
   if (isDuplicate) {
     if (previousComment !== comment) rebuildCodes();
     $('scanStatus').textContent = previousComment !== comment ? 'Комментарий к КИЗ обновлён.' : 'Этот КИЗ уже добавлен. Дубликат не сохранён.';
+    playScanSound(previousComment !== comment ? 'success' : 'error');
     diagnostic('scan.duplicate');
   } else {
     manualCodes.add(value); rebuildCodes();
     $('scanStatus').textContent = `КИЗ сохранён. Вручную добавлено: ${manualCodes.size}. Можно сканировать следующий.`;
+    playScanSound('success');
     diagnostic('scan.saved', {count: manualCodes.size});
   }
   $('scanComment').value = '';
@@ -434,11 +438,13 @@ $('barcodeForm').onsubmit = event => {
   if (busy || importing || catalogLoading) return;
   const input = $('barcodeInput');
   if (!/^[0-9]{13}$/.test(input.value)) {
+    playScanSound('error');
     $('barcodeStatus').textContent = 'Отсканирован не ШК';
     input.select(); input.focus(); return;
   }
   const missingDatePart = ['barcodeDay', 'barcodeMonth', 'barcodeYear'].find(id => !$(id).value);
   if (missingDatePart) {
+    playScanSound('error');
     $('barcodeStatus').textContent = 'Срок годности не введён. Выберите день, месяц и год.';
     $(missingDatePart).focus(); return;
   }
@@ -453,6 +459,7 @@ $('barcodeForm').onsubmit = event => {
   }
   refreshBarcodeResults(); archiveBarcodeResults();
   $('barcodeStatus').textContent = `ШК сохранён. Добавлено товаров без КИЗ: ${barcodeRows.length}. Можно сканировать следующий.`;
+  playScanSound('success');
   $('barcodeComment').value = '';
   clearBarcodeDate();
   input.value = ''; input.focus();
